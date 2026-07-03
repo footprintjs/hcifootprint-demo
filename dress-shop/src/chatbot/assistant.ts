@@ -27,7 +27,10 @@ Work method, every turn:
 2. For a multi-step task, call its skill tool with NO arguments to open it: the result lists
    readySteps (what is fireable right now, with expected inputs). Act by calling the SAME skill
    tool again with {step, input}. Steps are data in results — never separate tools.
-3. One-off actions outside a flow go through do_action({action, input}).
+3. When a step returns a "data" field (e.g. search results), READ it as data: it lists the items
+   you can act on next, with their ids. Use those ids to fill the next step's input (e.g. take a
+   dressId from the search results before calling view-dress). Never invent an id.
+4. One-off actions outside a flow go through do_action({action, input}).
 4. High-effect steps come back as judgment "needs-confirm". You must then call
    request_confirmation — the user answers directly — and only after approval call the skill
    tool again with confirm: true. Never pass confirm: true without an approval.
@@ -46,6 +49,15 @@ export type TurnResult =
   | { type: 'reply'; text: string }
   | { type: 'confirm'; question: ConfirmQuestion };
 
+export interface AssistantOptions {
+  /**
+   * Live progress: called with a short human-readable status BEFORE each tool
+   * runs ("Searching the catalog…", "Placing the order…"). The web front-end
+   * polls these so the user sees what the agent is doing, not just "thinking".
+   */
+  onActivity?: (status: string) => void;
+}
+
 export interface Assistant {
   /** Send a user message. Resolves to a reply, or a pause awaiting confirmation. */
   send(userMessage: string): Promise<TurnResult>;
@@ -57,10 +69,33 @@ export interface Assistant {
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
+/** Shopper-friendly status per action id — what the agent is doing, in plain words. */
+const PRETTY: Record<string, string> = {
+  'browse-dresses': 'Opening the catalog…',
+  'search-dresses': 'Searching the catalog…',
+  'filter-by-color': 'Filtering by color…',
+  'view-dress': 'Opening a dress…',
+  'add-to-cart': 'Adding to the cart…',
+  'go-to-cart': 'Opening the cart…',
+  'proceed-to-checkout': 'Going to checkout…',
+  'place-order': 'Placing the order…',
+  'view-orders': 'Opening your orders…',
+  'check-order-status': 'Checking your order…',
+};
+
+function activityLabel(kind: { type: 'skill'; id: string } | { type: 'whats_here' } | { type: 'do_action' }, step: string | undefined): string {
+  if (step && PRETTY[step]) return PRETTY[step];
+  if (kind.type === 'whats_here') return 'Looking around the shop…';
+  if (kind.type === 'skill' && !step) return `Planning: ${kind.id.replace(/-/g, ' ')}…`;
+  if (step) return `Working on ${step.replace(/-/g, ' ')}…`;
+  return 'Working…';
+}
+
 /** Anthropic tool names allow [a-zA-Z0-9_-] only — map the port's dotted MCP names. */
 const apiName = (portName: string) => portName.replace(/^dress-shop\./, '').replace(/[^a-zA-Z0-9_-]/g, '_');
 
-export function createAssistant(session: Session): Assistant {
+export function createAssistant(session: Session, options?: AssistantOptions): Assistant {
+  const emit = (status: string) => options?.onActivity?.(status);
   // The HARD human-in-the-loop gate. The serve layer stops high-effect steps
   // at needs-confirm; this set is what an APPROVAL (and only an approval)
   // unlocks — the model saying confirm:true on its own is bounced back.
@@ -75,12 +110,19 @@ export function createAssistant(session: Session): Assistant {
   const modeBTools = port.tools().map((tool) => {
     const name = apiName(tool.name);
     portNameByApiName.set(name, tool.name);
+    const kind: { type: 'skill'; id: string } | { type: 'whats_here' } | { type: 'do_action' } =
+      tool.name.includes('.skill.')
+        ? { type: 'skill', id: tool.name.split('.skill.')[1] }
+        : tool.name.endsWith('.whats_here')
+          ? { type: 'whats_here' }
+          : { type: 'do_action' };
     return defineTool({
       name,
       description: tool.description,
       inputSchema: tool.inputSchema as Record<string, unknown>,
       execute: async (args: { step?: string; action?: string; confirm?: boolean } & Record<string, unknown>) => {
         const stepKey = args.step ?? args.action;
+        emit(activityLabel(kind, stepKey));
         if (args.confirm === true && stepKey !== undefined && !approvals.has(stepKey)) {
           return JSON.stringify({
             ok: false,
@@ -93,6 +135,12 @@ export function createAssistant(session: Session): Assistant {
           approvals.delete(stepKey); // one approval = one fire
         }
         await flush(); // let the app's handler run and the tap settle
+        // Attach what the fired action RETURNED (search results, order status) —
+        // the "act → data back" channel, so the model can pick real ids next.
+        if (typeof result['transitionId'] === 'string') {
+          const produced = session.producedFor(result['transitionId']);
+          if (produced !== undefined) result['data'] = produced;
+        }
         return JSON.stringify(result, null, 1);
       },
     });
@@ -114,6 +162,7 @@ export function createAssistant(session: Session): Assistant {
         required: ['affordanceId', 'summary'],
       },
       execute: async (args: { affordanceId: string; summary: string }) => {
+        emit('Waiting for your approval…');
         askHuman({ affordanceId: args.affordanceId, summary: args.summary });
         return ''; // unreachable — askHuman always pauses
       },
@@ -132,6 +181,7 @@ export function createAssistant(session: Session): Assistant {
         required: ['request'],
       },
       execute: async (args: { request: string; reason?: 'no-skill-matched' | 'guard-blocked' | 'needs-backend-data' | 'other' }) => {
+        emit('Noting something we can’t do yet…');
         session.reportGap({ request: args.request, reason: args.reason, principal: 'agent' });
         return JSON.stringify({ recorded: true }); // minimal ack — never echo the ask back
       },

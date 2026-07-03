@@ -72,6 +72,9 @@ export const PAGE = /* html */ `<!doctype html>
   .user { align-self:flex-end; background:var(--hi); color:#fff; }
   .bot  { align-self:flex-start; background:#8882; }
   .sys  { align-self:center; font-size:12px; opacity:.65; text-align:center; }
+  .working { opacity:.9; font-weight:600; color:var(--hi2); }
+  @keyframes pulse { 0%,100%{opacity:.55} 50%{opacity:1} }
+  .working { animation:pulse 1.1s ease-in-out infinite; }
   .confirm { align-self:center; background:#f39c1233; border:1px solid #f39c12; border-radius:12px; padding:11px; text-align:center; max-width:94%; font-size:14px; }
   .confirm button { margin:8px 5px 0; padding:6px 16px; border-radius:8px; border:0; cursor:pointer; font-weight:600; font:inherit; }
   .yes { background:#27ae60; color:#fff; } .no { background:#8884; color:inherit; }
@@ -269,6 +272,22 @@ setInterval(async () => {
 
 /* ── chat dock ─────────────────────────────────────────── */
 function add(cls, text){ const d = el('div','msg ' + cls, text); $('log').appendChild(d); $('log').scrollTop = 1e9; return d; }
+
+// Run a turn with a LIVE status line: poll /api/activity and show the agent's
+// latest step ("Searching the catalog…") until the turn resolves.
+async function withStatus(request){
+  const status = add('sys','…thinking'); status.classList.add('working');
+  let polling = true;
+  (async () => {
+    while (polling){
+      try { const a = await (await fetch('/api/activity')).json();
+        if (a.steps && a.steps.length) status.textContent = '⋯ ' + a.steps[a.steps.length - 1]; } catch {}
+      await new Promise(r => setTimeout(r, 350));
+    }
+  })();
+  try { return await request(); } finally { polling = false; status.remove(); }
+}
+
 function renderTurn(turn){
   if (turn.error){ add('sys','⚠ ' + turn.error); return; }
   if (turn.type === 'confirm'){
@@ -277,7 +296,7 @@ function renderTurn(turn){
     const yes = el('button','yes','Approve'); const no = el('button','no','Decline');
     box.append(yes, no); $('log').appendChild(box); $('log').scrollTop = 1e9;
     const answer = async (ok) => { box.remove(); add('sys', ok ? '✔ approved' : '✘ declined');
-      renderTurn(await post('/api/confirm',{approved: ok})); refresh(); };
+      renderTurn(await withStatus(() => post('/api/confirm',{approved: ok}))); refresh(); };
     yes.onclick = () => answer(true); no.onclick = () => answer(false);
     return;
   }
@@ -287,9 +306,8 @@ $('f').onsubmit = async (e) => {
   e.preventDefault();
   const msg = $('m').value.trim(); if (!msg) return; $('m').value = '';
   add('user', msg);
-  const wait = add('sys','…thinking');
-  const turn = await post('/api/chat',{message: msg});
-  wait.remove(); renderTurn(turn); refresh();
+  const turn = await withStatus(() => post('/api/chat',{message: msg}));
+  renderTurn(turn); refresh();
 };
 
 refresh();

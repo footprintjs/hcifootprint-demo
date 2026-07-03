@@ -22,7 +22,29 @@ loadDotEnv();
 
 const shop = new DressShop();
 const session = connectShop(shop);
-const assistant = createAssistant(session);
+
+// Live progress for the dock: the assistant emits a status before each tool
+// runs; we buffer the current turn's steps so the browser can poll and show
+// what's happening ("Searching the catalog…") instead of a static "thinking".
+let activity: string[] = [];
+let turnActive = false;
+const assistant = createAssistant(session, {
+  onActivity: (status) => {
+    activity.push(status);
+    if (activity.length > 24) activity.shift();
+  },
+});
+
+/** Run one assistant turn with a fresh activity buffer the browser can poll. */
+async function withActivity(run: () => Promise<TurnResult>): Promise<TurnResult> {
+  activity = [];
+  turnActive = true;
+  try {
+    return await run();
+  } finally {
+    turnActive = false;
+  }
+}
 
 function turnToJSON(turn: TurnResult): Record<string, unknown> {
   return turn.type === 'confirm'
@@ -105,16 +127,20 @@ const server = http.createServer((req, res) => {
           return send(res, 200, { ok: false, error: String(error instanceof Error ? error.message : error) });
         }
       }
+      if (req.method === 'GET' && req.url === '/api/activity') {
+        // Polled by the dock while a turn is in flight — the latest line is shown live.
+        return send(res, 200, { active: turnActive, steps: activity });
+      }
       if (req.method === 'POST' && req.url === '/api/chat') {
         const { message } = await readBody(req);
         if (typeof message !== 'string' || !message.trim()) {
           return send(res, 400, { error: 'message required' });
         }
-        return send(res, 200, turnToJSON(await assistant.send(message)));
+        return send(res, 200, turnToJSON(await withActivity(() => assistant.send(message))));
       }
       if (req.method === 'POST' && req.url === '/api/confirm') {
         const { approved } = await readBody(req);
-        return send(res, 200, turnToJSON(await assistant.confirm(approved === true)));
+        return send(res, 200, turnToJSON(await withActivity(() => assistant.confirm(approved === true))));
       }
       send(res, 404, { error: 'not found' });
     } catch (error) {
