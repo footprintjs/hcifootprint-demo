@@ -7,7 +7,8 @@
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "chat": "tsx src/chatbot/chat.ts"
+    "chat": "tsx src/chatbot/chat.ts",
+    "serve": "tsx src/web/server.ts"
   },
   "engines": {
     "node": ">=20"
@@ -19,7 +20,8 @@
     "vitest": "^4.0.0"
   },
   "dependencies": {
-    "hcifootprint": "file:../../hcifootprint",
-    "agentfootprint": "file:../../agentfootprint"
+    "@anthropic-ai/sdk": "^0.110.0",
+    "agentfootprint": "file:../../agentfootprint",
+    "hcifootprint": "file:../../hcifootprint"
   }
 }
