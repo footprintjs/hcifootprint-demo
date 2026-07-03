@@ -57,6 +57,54 @@ const server = http.createServer((req, res) => {
           gaps: session.gaps(),
         });
       }
+      if (req.method === 'GET' && req.url === '/api/view') {
+        // Everything the storefront renders — the SAME shop instance the agent drives.
+        const shopState = shop.state;
+        return send(res, 200, {
+          node: session.node,
+          version: session.version,
+          results: shopState.results,
+          activeColor: shopState.activeColor,
+          selectedDress: shopState.selectedDress,
+          cart: shopState.cart,
+          orders: shopState.orders.map((order) => ({
+            id: order.id,
+            total: order.total,
+            status: order.status,
+            count: order.items.length,
+          })),
+          lastOrder: shopState.lastOrder ? { id: shopState.lastOrder.id, total: shopState.lastOrder.total } : null,
+          orderStatusMessage: shopState.orderStatusMessage,
+          gaps: session.gaps().length,
+          awaitingConfirmation: assistant.awaitingConfirmation,
+        });
+      }
+      if (req.method === 'POST' && req.url === '/api/app') {
+        // The website's buttons — they call the app's OWN handlers, exactly as a
+        // human click would. The agent layer sees this motion only through its
+        // taps (store subscription + router events); nothing here touches the
+        // session directly. Human and agent drive one and the same app.
+        const { method, args } = (await readBody(req)) as { method?: string; args?: Record<string, unknown> };
+        try {
+          switch (method) {
+            case 'browseCatalog': shop.browseCatalog(); break;
+            case 'search': shop.search(String(args?.['query'] ?? '')); break;
+            case 'filterByColor': shop.filterByColor(String(args?.['color'] ?? '')); break;
+            case 'openDress': shop.openDress(String(args?.['dressId'] ?? '')); break;
+            case 'addToCart': shop.addToCart(); break;
+            case 'openCart': shop.openCart(); break;
+            case 'checkout': shop.checkout(); break;
+            case 'placeOrder': shop.placeOrder(); break;
+            case 'openOrders': shop.openOrders(); break;
+            case 'checkOrderStatus': shop.checkOrderStatus(String(args?.['orderId'] ?? '')); break;
+            case 'navigate': shop.navigate(String(args?.['page'] ?? 'home') as Parameters<typeof shop.navigate>[0]); break;
+            default: return send(res, 400, { ok: false, error: 'unknown method' });
+          }
+          return send(res, 200, { ok: true });
+        } catch (error) {
+          return send(res, 200, { ok: false, error: String(error instanceof Error ? error.message : error) });
+        }
+      }
       if (req.method === 'POST' && req.url === '/api/chat') {
         const { message } = await readBody(req);
         if (typeof message !== 'string' || !message.trim()) {
