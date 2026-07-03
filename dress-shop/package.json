@@ -1,0 +1,19 @@
+{
+  "name": "dress-shop-demo",
+  "version": "0.0.1",
+  "private": true,
+  "description": "A small dress store. Commit 1: the app alone. Later commits add an agent layer on top — watch the diff.",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.5.0",
+    "vitest": "^4.0.0"
+  }
+}
