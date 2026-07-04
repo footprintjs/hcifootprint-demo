@@ -195,7 +195,11 @@ export function createAssistant(session: Session, options?: AssistantOptions): A
   ];
 
   let agentBuilder = Agent.create({
-    provider: anthropic({ defaultModel: MODEL }),
+    // A full buy-it-for-me flow is a long chain of Opus turns; each is a
+    // non-streaming call. Give it a generous timeout + retries so one slow
+    // turn (or a transient network stall) doesn't surface as "Request timed
+    // out" — it retries instead.
+    provider: anthropic({ defaultModel: MODEL, timeout: 120_000, maxRetries: 3 }),
     name: 'dress-shop-assistant',
     model: 'anthropic',
   })
