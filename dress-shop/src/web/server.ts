@@ -21,25 +21,44 @@ import { PAGE } from './page.js';
 
 loadDotEnv();
 
-const shop = new DressShop();
-const session = connectShop(shop);
 // HCI_MODE=direct → the assistant calls the session in-process; anything else
 // (default) → it drives the session over a REAL MCP connection (see mcp-bridge).
 // Same behavior either way — the MCP layer is plumbing, not logic.
 const MODE: 'mcp' | 'direct' = process.env['HCI_MODE'] === 'direct' ? 'direct' : 'mcp';
-const appMcp = MODE === 'mcp' ? await connectOverMcp(session) : connectDirect(session);
 
 // Live progress for the dock: the assistant emits a status before each tool
 // runs; we buffer the current turn's steps so the browser can poll and show
 // what's happening ("Searching the catalog…") instead of a static "thinking".
 let activity: string[] = [];
 let turnActive = false;
-const assistant = createAssistant(session, appMcp, {
-  onActivity: (status) => {
-    activity.push(status);
-    if (activity.length > 24) activity.shift();
-  },
-});
+
+/**
+ * One live app instance: a fresh shop + session + MCP/direct port + assistant.
+ * "New session" (POST /api/reset) swaps this out — the whole point of the
+ * library is that a session is cheap and ephemeral, so starting fresh just
+ * means building a new one, not resetting state in place.
+ */
+interface Live {
+  shop: DressShop;
+  session: ReturnType<typeof connectShop>;
+  appMcp: Awaited<ReturnType<typeof connectOverMcp>>;
+  assistant: ReturnType<typeof createAssistant>;
+}
+
+async function buildLive(): Promise<Live> {
+  const shop = new DressShop();
+  const session = connectShop(shop);
+  const appMcp = MODE === 'mcp' ? await connectOverMcp(session) : connectDirect(session);
+  const assistant = createAssistant(session, appMcp, {
+    onActivity: (status) => {
+      activity.push(status);
+      if (activity.length > 24) activity.shift();
+    },
+  });
+  return { shop, session, appMcp, assistant };
+}
+
+let live = await buildLive();
 
 /** Run one assistant turn with a fresh activity buffer the browser can poll. */
 async function withActivity(run: () => Promise<TurnResult>): Promise<TurnResult> {
@@ -74,8 +93,18 @@ function send(res: http.ServerResponse, status: number, body: unknown, type = 'a
 const server = http.createServer((req, res) => {
   void (async () => {
     try {
+      const { shop, session, assistant } = live; // the current instance for this request
       if (req.method === 'GET' && req.url === '/') {
         return send(res, 200, PAGE, 'text/html; charset=utf-8');
+      }
+      if (req.method === 'POST' && req.url === '/api/reset') {
+        // Start fresh: build a brand-new shop + session + assistant, then close
+        // the old MCP connection. Nothing is reset in place — a session is cheap.
+        const old = live;
+        live = await buildLive();
+        activity = [];
+        await old.appMcp.close().catch(() => undefined);
+        return send(res, 200, { ok: true });
       }
       if (req.method === 'GET' && req.url === '/api/inspect') {
         return send(res, 200, {

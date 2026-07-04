@@ -177,8 +177,9 @@ export const PAGE = /* html */ `<!doctype html>
 <div id="modal" class="modal" hidden>
   <div class="mhead">
     <div class="av">✨</div>
-    <div class="t">Maison Stylist<small>powered by Claude Opus</small></div>
-    <button id="mx" class="x">✕</button>
+    <div class="t">Maison Stylist<small id="msub">powered by Claude Opus</small></div>
+    <button id="reset" class="x" title="Start a fresh session — clears the chat, cart, and orders">↺</button>
+    <button id="mx" class="x" style="margin-left:6px">✕</button>
   </div>
   <div id="log"><div class="sys">Hi! Ask me to find and buy a dress — try "find me a red dress under $150 and buy the cheapest one".</div></div>
   <form id="f"><input id="m" autocomplete="off" placeholder="Message the stylist…" /><button class="send">Send</button></form>
@@ -387,6 +388,17 @@ setInterval(async function(){
 function openModal(){ $('modal').hidden=false; $('fab').hidden=true; unread=false; setTimeout(function(){ $('m').focus(); },50); $('log').scrollTop=1e9; }
 function closeModal(){ $('modal').hidden=true; $('fab').hidden=false; }
 $('fab').onclick=openModal; $('mx').onclick=closeModal;
+
+// Start fresh: rebuild the shop + session + assistant server-side, clear the
+// chat, and re-render the storefront. Stays open so you can test again at once.
+$('reset').onclick=async function(){
+  $('reset').disabled=true; $('reset').textContent='…';
+  try{ await post('/api/reset',{}); }catch(e){}
+  $('log').textContent='';
+  add('sys','✨ Fresh session — chat, cart, and orders cleared. Ask away!');
+  await refresh();
+  $('reset').textContent='↺'; $('reset').disabled=false;
+};
 
 function add(cls,text){ var d=el('div','msg '+cls,text); $('log').appendChild(d); $('log').scrollTop=1e9; return d; }
 async function withStatus(request){
