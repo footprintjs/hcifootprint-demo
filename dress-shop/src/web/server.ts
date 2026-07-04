@@ -13,7 +13,7 @@
 import http from 'node:http';
 import { DressShop } from '../app/shop.js';
 import { connectShop } from '../agent-layer/connect.js';
-import { connectOverMcp } from '../agent-layer/mcp-bridge.js';
+import { connectDirect, connectOverMcp } from '../agent-layer/mcp-bridge.js';
 import { loadDotEnv } from '../chatbot/env.js';
 import { createAssistant } from '../chatbot/assistant.js';
 import type { TurnResult } from '../chatbot/assistant.js';
@@ -23,8 +23,11 @@ loadDotEnv();
 
 const shop = new DressShop();
 const session = connectShop(shop);
-// The assistant drives this session over a real MCP connection (see mcp-bridge).
-const appMcp = await connectOverMcp(session);
+// HCI_MODE=direct → the assistant calls the session in-process; anything else
+// (default) → it drives the session over a REAL MCP connection (see mcp-bridge).
+// Same behavior either way — the MCP layer is plumbing, not logic.
+const MODE: 'mcp' | 'direct' = process.env['HCI_MODE'] === 'direct' ? 'direct' : 'mcp';
+const appMcp = MODE === 'mcp' ? await connectOverMcp(session) : connectDirect(session);
 
 // Live progress for the dock: the assistant emits a status before each tool
 // runs; we buffer the current turn's steps so the browser can poll and show
@@ -102,6 +105,7 @@ const server = http.createServer((req, res) => {
           orderStatusMessage: shopState.orderStatusMessage,
           gaps: session.gaps().length,
           awaitingConfirmation: assistant.awaitingConfirmation,
+          mode: MODE,
         });
       }
       if (req.method === 'POST' && req.url === '/api/app') {
@@ -158,7 +162,8 @@ const server = http.createServer((req, res) => {
 
 const PORT = Number(process.env['PORT'] ?? 5178);
 server.listen(PORT, () => {
-  console.log(`\n  dress-shop assistant → http://localhost:${PORT}\n`);
+  const transport = MODE === 'mcp' ? 'over MCP (real protocol)' : 'direct (in-process, no MCP)';
+  console.log(`\n  dress-shop assistant [${transport}] → http://localhost:${PORT}\n`);
   console.log('  Try: "find me a red floral dress and buy it" — you\'ll be asked to confirm the order.');
   console.log('  The right panel shows live app state and the gap ledger.\n');
 });

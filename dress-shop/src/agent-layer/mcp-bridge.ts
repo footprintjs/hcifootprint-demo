@@ -14,6 +14,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { mcpServer } from 'hcifootprint/mcp';
+import { skillsAsTools } from 'hcifootprint';
 import type { InteractionSession } from 'hcifootprint';
 
 export interface McpToolDef {
@@ -59,5 +60,34 @@ export async function connectOverMcp(session: InteractionSession): Promise<AppMc
       await client.close();
       await server.close();
     },
+  };
+}
+
+/**
+ * The SAME app-tool surface, but DIRECT — no MCP, no transport, just the
+ * in-process skillsAsTools port. The A/B baseline: swap connectOverMcp for
+ * connectDirect and the assistant behaves identically, proving the MCP layer is
+ * pure plumbing (it adds the protocol, not the behavior).
+ */
+export function connectDirect(session: InteractionSession): AppMcp {
+  const port = skillsAsTools(session, { source: 'agent' });
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+  return {
+    tools: port.tools().map((t) => ({
+      name: t.name,
+      description: t.description,
+      inputSchema: t.inputSchema as Record<string, unknown>,
+    })),
+    call: async (name, args) => {
+      const result = port.call(name, args) as Record<string, unknown>;
+      // mirror the MCP server's act→data-back: let the handler settle, fold in produced data.
+      if (typeof result['transitionId'] === 'string') {
+        await tick();
+        const produced = session.producedFor(result['transitionId']);
+        if (produced !== undefined) result['data'] = produced;
+      }
+      return result;
+    },
+    close: async () => {},
   };
 }

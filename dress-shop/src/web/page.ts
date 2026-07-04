@@ -169,7 +169,7 @@ export const PAGE = /* html */ `<!doctype html>
 <main id="main"></main>
 
 <footer><div class="wrap">
-  <span id="whereami"></span><span id="gapcount"></span>
+  <span id="mode"></span><span id="whereami"></span><span id="gapcount"></span>
   <span>you &amp; the assistant share <b>one live session</b></span>
 </div></footer>
 
@@ -363,9 +363,14 @@ function productCard(d){
   return card;
 }
 
+function setMode(m){
+  var el=$('mode'); el.textContent = m==='mcp' ? 'assistant: over MCP' : 'assistant: direct (no MCP)';
+  el.style.cssText='background:'+(m==='mcp'?'var(--wine)':'#555')+';color:#fff;padding:2px 9px;border-radius:999px;font-weight:600';
+}
 async function refresh(){
   var r=await fetch('/api/view'); view=await r.json();
   renderNav(); renderMain();
+  setMode(view.mode);
   $('whereami').textContent='you are on: '+view.node+' (v'+view.version+')';
   $('gapcount').textContent='gap ledger: '+view.gaps+' row'+(view.gaps===1?'':'s');
   lastVersion=view.version;
