@@ -84,10 +84,11 @@ const PRETTY: Record<string, string> = {
 };
 
 function activityLabel(kind: { type: 'skill'; id: string } | { type: 'whats_here' } | { type: 'do_action' }, step: string | undefined): string {
-  if (step && PRETTY[step]) return PRETTY[step];
+  const leaf = step?.split('.').pop(); // steps are qualified paths ('catalog.search-dresses')
+  if (leaf && PRETTY[leaf]) return PRETTY[leaf];
   if (kind.type === 'whats_here') return 'Looking around the shop…';
   if (kind.type === 'skill' && !step) return `Planning: ${kind.id.replace(/-/g, ' ')}…`;
-  if (step) return `Working on ${step.replace(/-/g, ' ')}…`;
+  if (leaf) return `Working on ${leaf.replace(/-/g, ' ')}…`;
   return 'Working…';
 }
 

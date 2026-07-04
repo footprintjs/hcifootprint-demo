@@ -3,11 +3,14 @@
  * this file and graph.ts. The application (src/app/) is not modified at all;
  * the layer attaches through the three wires any app already exposes:
  *
- *   wire 1  store subscription  →  session.updateState(delta)     (the tap)
- *   wire 2  router events       →  registerTools + session.sync   (mount/unmount + cursor)
- *   wire 3  existing handlers   →  registered by REFERENCE        (fire() executes them)
+ *   wire 1  store subscription  →  session.updateState(delta)          (the tap)
+ *   wire 2  router events       →  session.sync + registerToolGroup    (cursor + mount/unmount)
+ *   wire 3  existing handlers   →  registered by REFERENCE             (fire() executes them)
+ *
+ * Registration is HANDLE-based: registerToolGroup returns a handle we hold and
+ * unregister() when the page changes — no group name to invent.
  */
-import type { Session, ToolHandler } from 'hcifootprint';
+import type { InteractionSession, ToolGroupHandle, ToolHandler } from 'hcifootprint';
 import type { DressShop, Page, ShopState } from '../app/shop.js';
 import { dressShopGraph } from './graph.js';
 
@@ -62,7 +65,7 @@ function pageTools(shop: DressShop): Record<Page, Record<string, ToolHandler>> {
 }
 
 /** Attach the agent layer to a running shop. Purely additive — the shop never knows. */
-export function connectShop(shop: DressShop, opts?: { onWarn?: (m: string) => void }): Session {
+export function connectShop(shop: DressShop, opts?: { onWarn?: (m: string) => void }): InteractionSession {
   const graph = dressShopGraph();
   const session = graph.createSession({
     node: shop.state.page,
@@ -77,14 +80,17 @@ export function connectShop(shop: DressShop, opts?: { onWarn?: (m: string) => vo
     if (Object.keys(delta).length > 0) session.updateState(delta);
   });
 
-  // wire 2 — the router (+ lazy tool groups)
-  const mount = (page: Page, previous?: Page): void => {
-    if (previous) session.unregisterGroup(`page:${previous}`);
-    session.registerTools({ group: `page:${page}`, tools: tools[page] });
-    session.sync(page);
+  // wire 2 — the router. Release the old page's handle, move the cursor to the
+  // new page, THEN register the new page's tools (so they land on the confirmed
+  // page and are never treated as a foreign/dormant registration).
+  let handle: ToolGroupHandle | null = null;
+  const mount = (page: Page, isNavigation: boolean): void => {
+    handle?.unregister();
+    if (isNavigation) session.sync(page);
+    handle = session.registerToolGroup(page, { handlers: tools[page] });
   };
-  shop.onNavigate((page, previous) => mount(page, previous));
-  mount(shop.state.page);
+  shop.onNavigate((page) => mount(page, true));
+  mount(shop.state.page, false); // initial page — already the cursor, no sync
 
   return session;
 }

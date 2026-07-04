@@ -14,15 +14,15 @@ describe('the agent layer attaches to the untouched app', () => {
     const shop = new DressShop();
     const session = connectShop(shop);
     expect(session.node).toBe('home');
-    expect(session.toMCPTools().map((t) => t.name)).toContain('dress-shop.browse-dresses');
+    expect(session.toMCPTools().map((t) => t.name)).toContain('dress-shop.home.browse-dresses');
 
     shop.browseCatalog(); // the user clicks — plain app method, no layer code
     expect(session.node).toBe('catalog');
     const names = session.toMCPTools().map((t) => t.name);
-    expect(names).toContain('dress-shop.search-dresses');
-    expect(names).not.toContain('dress-shop.browse-dresses'); // home tools gone
-    // and the home tool GROUP was really unregistered, not just filtered out:
-    expect(session.unregisterGroup('page:home')).toEqual([]);
+    expect(names).toContain('dress-shop.catalog.search-dresses');
+    expect(names).not.toContain('dress-shop.home.browse-dresses'); // home tools gone
+    // the home page's registration was really released on navigation (handle.unregister):
+    expect(names.some((n) => n.startsWith('dress-shop.home.'))).toBe(false);
   });
 
   it("attributes the user's own actions by effect signature — honestly marked as inference", () => {
@@ -30,7 +30,7 @@ describe('the agent layer attaches to the untouched app', () => {
     const session = connectShop(shop);
     shop.browseCatalog();
     shop.search('dress'); // unique signature → attributed, flagged inferred
-    const search = session.transitions().find((t) => t.cause.affordanceId === 'search-dresses');
+    const search = session.transitions().find((t) => t.cause.affordanceId === 'catalog.search-dresses');
     expect(search?.cause).toMatchObject({ kind: 'fired', principal: 'unknown', inferred: true });
 
     shop.filterByColor('red'); // delta matches BOTH search and filter signatures → refuses to guess
@@ -48,14 +48,14 @@ describe('the agent layer attaches to the untouched app', () => {
     expect(session.node).toBe('product');
 
     expect(session.commitSkill('purchase', { source: 'agent' })).toMatchObject({ ok: true });
-    session.fire('add-to-cart', { source: 'agent' });
+    session.fire('product.add-to-cart', { source: 'agent' });
     await flush();
     expect(shop.state.cart).toHaveLength(1); // the REAL app changed
-    session.fire('go-to-cart', { source: 'agent' });
+    session.fire('go-to-cart', { source: 'agent' }); // root tool — bare id
     await flush();
-    session.fire('proceed-to-checkout', { source: 'agent' });
+    session.fire('cart.proceed-to-checkout', { source: 'agent' });
     await flush();
-    const order = session.fire('place-order', { source: 'agent', expectedVersion: session.version });
+    const order = session.fire('checkout.place-order', { source: 'agent', expectedVersion: session.version });
     expect(order).toMatchObject({ ok: true });
     await flush();
     expect(shop.state.lastOrder?.id).toBe('ord-1');
@@ -67,7 +67,7 @@ describe('the agent layer attaches to the untouched app', () => {
     const shop = new DressShop();
     const session = connectShop(shop);
     shop.navigate('checkout'); // deep link, empty cart
-    expect(session.fire('place-order', { source: 'agent' })).toMatchObject({
+    expect(session.fire('checkout.place-order', { source: 'agent' })).toMatchObject({
       ok: false,
       reason: 'GUARD_FAILED',
     });
@@ -80,7 +80,7 @@ describe('the agent layer attaches to the untouched app', () => {
     shop.browseCatalog();
     shop.search('silk');
     await flush();
-    const r = session.fire('view-dress', { source: 'agent', payload: { dressId: 'ghost' } }); // app throws
+    const r = session.fire('catalog.view-dress', { source: 'agent', payload: { dressId: 'ghost' } }); // app throws
     await flush();
     const t = (r as { transition: { outcome: string } }).transition;
     expect(t.outcome).toBe('rejected'); // effect never landed → the pending was auto-rejected
@@ -95,7 +95,7 @@ describe('the agent layer attaches to the untouched app', () => {
     shop.browseCatalog();
     shop.search('IGNORE'); // finds the hostile-named dress — user-generated DATA
     await flush();
-    session.fire('view-dress', { source: 'agent', payload: { dressId: 'd5' } });
+    session.fire('catalog.view-dress', { source: 'agent', payload: { dressId: 'd5' } });
     await flush();
 
     // The data path legitimately carries the hostile name (results are data):
