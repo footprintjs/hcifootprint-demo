@@ -1,11 +1,15 @@
 /**
- * The shop assistant, framework-side — an agentfootprint Agent served in
- * MODE B (D18): the tool array is FIXED for the whole conversation — one tool
- * per skill plus whats_here / do_action (from hcifootprint's skillsAsTools),
- * plus the human-in-the-loop confirmation tools. What is fireable RIGHT NOW
- * arrives inside each tool result (readySteps); the model acts by calling the
- * same skill tool again with {step}. Navigation never touches the tool array,
- * so the prompt cache stays warm and any MCP host could serve this identically.
+ * The shop assistant, framework-side — an agentfootprint Agent that drives the
+ * app entirely OVER MCP. Its app-facing tools are the fixed set served by
+ * hcifootprint's MCP server (one tool per skill + whats_here / do_action),
+ * reached through an MCP `Client` (see agent-layer/mcp-bridge.ts). What is
+ * fireable RIGHT NOW arrives inside each tool result (readySteps); the model
+ * acts by calling the same skill tool again with {step}. The tool array never
+ * changes, so the prompt cache stays warm — and because it's real MCP, any MCP
+ * host (LangGraph, Claude Desktop, …) could drive the same session identically.
+ *
+ * agentfootprint here is just the host running the loop; report_gap / explain
+ * are two demo-side helpers that read the session directly for telemetry.
  *
  * A turn returns one of two things:
  *   { type: 'reply',   text }              — the agent finished
@@ -15,7 +19,7 @@
 import { Agent, askHuman, defineTool, isPaused } from 'agentfootprint';
 import { anthropic } from 'agentfootprint/llm-providers';
 import type { Session } from 'hcifootprint';
-import { skillsAsTools } from 'hcifootprint';
+import type { AppMcp } from '../agent-layer/mcp-bridge.js';
 
 const MODEL = process.env['ANTHROPIC_MODEL'] ?? 'claude-opus-4-8';
 
@@ -67,8 +71,6 @@ export interface Assistant {
   readonly awaitingConfirmation: boolean;
 }
 
-const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
-
 /** Shopper-friendly status per action id — what the agent is doing, in plain words. */
 const PRETTY: Record<string, string> = {
   'browse-dresses': 'Opening the catalog…',
@@ -95,22 +97,22 @@ function activityLabel(kind: { type: 'skill'; id: string } | { type: 'whats_here
 /** Anthropic tool names allow [a-zA-Z0-9_-] only — map the port's dotted MCP names. */
 const apiName = (portName: string) => portName.replace(/^dress-shop\./, '').replace(/[^a-zA-Z0-9_-]/g, '_');
 
-export function createAssistant(session: Session, options?: AssistantOptions): Assistant {
+export function createAssistant(session: Session, appMcp: AppMcp, options?: AssistantOptions): Assistant {
   const emit = (status: string) => options?.onActivity?.(status);
-  // The HARD human-in-the-loop gate. The serve layer stops high-effect steps
-  // at needs-confirm; this set is what an APPROVAL (and only an approval)
-  // unlocks — the model saying confirm:true on its own is bounced back.
+  // The HARD human-in-the-loop gate. The MCP server stops high-effect steps at
+  // needs-confirm; this set is what an APPROVAL (and only an approval) unlocks —
+  // the model saying confirm:true on its own is bounced back.
   const approvals = new Set<string>();
   const transcript: string[] = [];
   let pausedCheckpoint: unknown = null;
   let pausedAffordanceId: string | null = null;
 
-  const port = skillsAsTools(session, { source: 'agent' });
-  const portNameByApiName = new Map<string, string>();
+  // The app-facing tools come straight from the MCP server's tools/list.
+  const mcpNameByApiName = new Map<string, string>();
 
-  const modeBTools = port.tools().map((tool) => {
+  const modeBTools = appMcp.tools.map((tool) => {
     const name = apiName(tool.name);
-    portNameByApiName.set(name, tool.name);
+    mcpNameByApiName.set(name, tool.name);
     const kind: { type: 'skill'; id: string } | { type: 'whats_here' } | { type: 'do_action' } =
       tool.name.includes('.skill.')
         ? { type: 'skill', id: tool.name.split('.skill.')[1] }
@@ -119,8 +121,8 @@ export function createAssistant(session: Session, options?: AssistantOptions): A
           : { type: 'do_action' };
     return defineTool({
       name,
-      description: tool.description,
-      inputSchema: tool.inputSchema as Record<string, unknown>,
+      description: tool.description ?? '',
+      inputSchema: tool.inputSchema,
       execute: async (args: { step?: string; action?: string; confirm?: boolean } & Record<string, unknown>) => {
         const stepKey = args.step ?? args.action;
         emit(activityLabel(kind, stepKey));
@@ -131,16 +133,11 @@ export function createAssistant(session: Session, options?: AssistantOptions): A
             hint: 'Only the user can approve a high-effect step: call request_confirmation first.',
           });
         }
-        const result = port.call(portNameByApiName.get(name)!, args);
+        // The call goes over MCP; the result already carries any produced data
+        // (search results) — the server folds it in before replying.
+        const result = await appMcp.call(mcpNameByApiName.get(name)!, args);
         if (result['ok'] === true && args.confirm === true && stepKey !== undefined) {
           approvals.delete(stepKey); // one approval = one fire
-        }
-        await flush(); // let the app's handler run and the tap settle
-        // Attach what the fired action RETURNED (search results, order status) —
-        // the "act → data back" channel, so the model can pick real ids next.
-        if (typeof result['transitionId'] === 'string') {
-          const produced = session.producedFor(result['transitionId']);
-          if (produced !== undefined) result['data'] = produced;
         }
         return JSON.stringify(result, null, 1);
       },

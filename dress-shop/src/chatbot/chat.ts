@@ -6,6 +6,7 @@
 import readline from 'node:readline/promises';
 import { DressShop } from '../app/shop.js';
 import { connectShop } from '../agent-layer/connect.js';
+import { connectOverMcp } from '../agent-layer/mcp-bridge.js';
 import { loadDotEnv } from './env.js';
 import { createAssistant } from './assistant.js';
 
@@ -14,7 +15,7 @@ loadDotEnv();
 async function main(): Promise<void> {
   const shop = new DressShop();
   const session = connectShop(shop);
-  const assistant = createAssistant(session);
+  const assistant = createAssistant(session, await connectOverMcp(session)); // driven over MCP
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
   session.onGap((gap) =>

@@ -13,6 +13,7 @@
 import http from 'node:http';
 import { DressShop } from '../app/shop.js';
 import { connectShop } from '../agent-layer/connect.js';
+import { connectOverMcp } from '../agent-layer/mcp-bridge.js';
 import { loadDotEnv } from '../chatbot/env.js';
 import { createAssistant } from '../chatbot/assistant.js';
 import type { TurnResult } from '../chatbot/assistant.js';
@@ -22,13 +23,15 @@ loadDotEnv();
 
 const shop = new DressShop();
 const session = connectShop(shop);
+// The assistant drives this session over a real MCP connection (see mcp-bridge).
+const appMcp = await connectOverMcp(session);
 
 // Live progress for the dock: the assistant emits a status before each tool
 // runs; we buffer the current turn's steps so the browser can poll and show
 // what's happening ("Searching the catalog…") instead of a static "thinking".
 let activity: string[] = [];
 let turnActive = false;
-const assistant = createAssistant(session, {
+const assistant = createAssistant(session, appMcp, {
   onActivity: (status) => {
     activity.push(status);
     if (activity.length > 24) activity.shift();
