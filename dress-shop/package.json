@@ -10,7 +10,8 @@
     "chat": "tsx src/chatbot/chat.ts",
     "serve": "tsx src/web/server.ts",
     "serve:mcp": "PORT=5178 HCI_MODE=mcp tsx src/web/server.ts",
-    "serve:direct": "PORT=5179 HCI_MODE=direct tsx src/web/server.ts"
+    "serve:direct": "PORT=5179 HCI_MODE=direct tsx src/web/server.ts",
+    "drift": "tsx src/drift/drift-demo.ts"
   },
   "engines": {
     "node": ">=20"

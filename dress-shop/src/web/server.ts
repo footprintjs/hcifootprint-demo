@@ -14,6 +14,9 @@ import http from 'node:http';
 import { DressShop } from '../app/shop.js';
 import { connectShop } from '../agent-layer/connect.js';
 import { connectDirect, connectOverMcp } from '../agent-layer/mcp-bridge.js';
+import { checkGraph } from 'hcifootprint/testing';
+import { dressShopGraph } from '../agent-layer/graph.js';
+import { driftedDressShopGraph } from '../drift/drifted-graph.js';
 import { loadDotEnv } from '../chatbot/env.js';
 import { createAssistant } from '../chatbot/assistant.js';
 import type { TurnResult } from '../chatbot/assistant.js';
@@ -105,6 +108,25 @@ const server = http.createServer((req, res) => {
         activity = [];
         await old.appMcp.close().catch(() => undefined);
         return send(res, 200, { ok: true });
+      }
+      if (req.method === 'GET' && req.url === '/api/health') {
+        // The one-call health verdict for the live graph, and a deliberately
+        // drifted example — the "Graph health" panel toggles between them.
+        const initialState = {
+          resultIds: [] as string[],
+          resultCount: 0,
+          activeColor: '',
+          selectedDressId: '',
+          cartIds: [] as string[],
+          cartCount: 0,
+          orderCount: 0,
+          lastOrderId: '',
+          orderStatusMessage: '',
+        };
+        return send(res, 200, {
+          real: checkGraph(dressShopGraph(), { initialState }),
+          drifted: checkGraph(driftedDressShopGraph(), { initialState }),
+        });
       }
       if (req.method === 'GET' && req.url === '/api/inspect') {
         return send(res, 200, {

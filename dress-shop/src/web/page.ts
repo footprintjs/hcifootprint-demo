@@ -126,6 +126,19 @@ export const PAGE = /* html */ `<!doctype html>
   footer{border-top:1px solid var(--line);color:var(--muted);font-size:12.5px}
   footer .wrap{display:flex;gap:18px;flex-wrap:wrap;height:57px;align-items:center}
   footer b{color:var(--ink)}
+  .hbtn{margin-left:auto;background:transparent;border:1px solid var(--line);color:var(--muted);border-radius:999px;padding:3px 11px;font:600 12px var(--sans);cursor:pointer}
+  .hbtn:hover{color:var(--ink);border-color:var(--ink)}
+  .hpanel{position:fixed;left:24px;bottom:24px;z-index:42;width:470px;max-width:calc(100vw - 32px);background:var(--card);border:1px solid var(--line);border-radius:16px;box-shadow:0 30px 70px -20px rgba(60,20,30,.5);display:flex;flex-direction:column;overflow:hidden}
+  .hph{display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line);font-size:14px}
+  .hverdict{font:600 12px var(--sans);padding:2px 9px;border-radius:999px}
+  .hverdict.ok{background:#1f8a5422;color:#1f8a54}
+  .hverdict.bad{background:#a11f3c18;color:var(--wine)}
+  .hph .x{margin-left:auto;background:transparent;border:0;font-size:16px;cursor:pointer;color:var(--muted)}
+  .htabs{display:flex;gap:6px;padding:10px 14px 0}
+  .ht{background:transparent;border:1px solid var(--line);border-radius:999px;padding:4px 12px;font:600 12.5px var(--sans);cursor:pointer;color:var(--muted)}
+  .ht.on{background:var(--ink);color:#fff;border-color:var(--ink)}
+  .hout{margin:12px 14px;padding:12px;background:var(--bg);border:1px solid var(--line);border-radius:10px;font:12px/1.55 ui-monospace,Menlo,monospace;white-space:pre-wrap;overflow:auto;max-height:46vh;color:var(--ink)}
+  .hfoot{padding:10px 14px;border-top:1px solid var(--line);color:var(--muted);font-size:11.5px}
 
   /* ── floating assistant popup ── */
   .fab{position:fixed;right:24px;bottom:24px;z-index:40;display:inline-flex;align-items:center;gap:10px;background:var(--wine);color:#fff;border:0;border-radius:999px;padding:14px 20px;font:600 15px var(--sans);cursor:pointer;box-shadow:0 16px 34px -12px rgba(120,30,60,.6);transition:.2s}
@@ -171,7 +184,15 @@ export const PAGE = /* html */ `<!doctype html>
 <footer><div class="wrap">
   <span id="mode"></span><span id="whereami"></span><span id="gapcount"></span>
   <span>you &amp; the assistant share <b>one live session</b></span>
+  <button id="healthbtn" class="hbtn">◇ Graph health</button>
 </div></footer>
+
+<div id="hpanel" class="hpanel" hidden>
+  <div class="hph"><b>Graph health</b><span id="hverdict" class="hverdict"></span><button id="hx" class="x" title="Close">✕</button></div>
+  <div class="htabs"><button id="htLive" class="ht on">Live graph</button><button id="htDrift" class="ht">A drifted example</button></div>
+  <pre id="hout" class="hout"></pre>
+  <div class="hfoot">Static one-call check — <b>checkGraph()</b> from hcifootprint/testing. It surfaces drift; your team owns the fix.</div>
+</div>
 
 <button id="fab" class="fab"><span class="pulse"></span> Ask our stylist</button>
 <div id="modal" class="modal" hidden>
@@ -424,6 +445,28 @@ $('f').onsubmit=async function(e){
   add('user',msg); var turn=await withStatus(function(){ return post('/api/chat',{message:msg}); });
   renderTurn(turn); refresh();
 };
+
+/* ── graph health panel ── */
+var HEALTH=null, hvariant='real';
+async function openHealth(){
+  $('hpanel').hidden=false;
+  if(!HEALTH){ $('hout').textContent='Checking…'; try{ HEALTH=await (await fetch('/api/health')).json(); }catch(e){ $('hout').textContent='Could not load graph health.'; return; } }
+  renderHealth();
+}
+function renderHealth(){
+  if(!HEALTH) return;
+  var h=HEALTH[hvariant]; if(!h) return;
+  var v=$('hverdict');
+  v.textContent = h.ok ? '✓ healthy' : ('✗ '+h.errors+' error'+(h.errors===1?'':'s')+(h.warnings?(', '+h.warnings+' warning'+(h.warnings===1?'':'s')):''));
+  v.className='hverdict '+(h.ok?'ok':'bad');
+  $('hout').textContent=h.summary;
+  $('htLive').className='ht'+(hvariant==='real'?' on':'');
+  $('htDrift').className='ht'+(hvariant==='drifted'?' on':'');
+}
+$('healthbtn').onclick=openHealth;
+$('hx').onclick=function(){ $('hpanel').hidden=true; };
+$('htLive').onclick=function(){ hvariant='real'; renderHealth(); };
+$('htDrift').onclick=function(){ hvariant='drifted'; renderHealth(); };
 
 refresh();
 </script>
