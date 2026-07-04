@@ -1,312 +1,410 @@
 /**
- * The dress-shop WEBSITE + the assistant dock, one page. The storefront and
- * the agent drive the SAME app instance server-side: your clicks call the
+ * The dress-shop WEBSITE + a floating assistant popup, one page. The storefront
+ * and the agent drive the SAME app instance server-side: your clicks call the
  * app's real handlers via /api/app; the assistant fires the same handlers
  * through the session. Both kinds of motion show up live on both sides.
  *
- * Firewall discipline: every runtime string (dress names are untrusted UGC —
+ * Firewall discipline: every RUNTIME string (dress names are untrusted UGC —
  * d5 proves it, gap asks, model text) is rendered with textContent, never
- * innerHTML.
+ * innerHTML. innerHTML is used ONLY for our own static SVG built from a
+ * whitelisted color palette (never from app data).
+ *
+ * Note on the inline <script>: it uses string concatenation, never `${}`
+ * template interpolation, so the outer template literal leaves it untouched.
  */
 export const PAGE = /* html */ `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Maison Dresses · HCIFootprint demo</title>
+<title>Maison — modern dresses</title>
 <style>
-  :root { color-scheme: light dark; --edge:#8884; --hi:#c0392b; --hi2:#e67e22; --card:#88888812; }
-  * { box-sizing: border-box; }
-  body { margin:0; font:15px/1.5 system-ui,sans-serif; display:grid; grid-template-columns:1fr 360px; height:100vh; }
-  @media (max-width:900px){ body{grid-template-columns:1fr; height:auto} .dock{border-left:0;border-top:1px solid var(--edge); height:60vh} }
+  :root{
+    --bg:#faf6f1; --ink:#241d1b; --muted:#8a7d75; --line:#ece1d6; --card:#fffdfb;
+    --wine:#8e2b4e; --wine-d:#6d1f3c; --gold:#c8952f; --blush:#f4e3e6;
+    --shadow:0 10px 30px -14px rgba(60,20,30,.28); --shadow-sm:0 4px 14px -8px rgba(60,20,30,.25);
+    --serif:"Iowan Old Style","Palatino Linotype",Georgia,"Times New Roman",serif;
+    --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{background:var(--bg);color:var(--ink);font:15px/1.6 var(--sans);-webkit-font-smoothing:antialiased}
+  a{color:inherit}
+  .wrap{max-width:1120px;margin:0 auto;padding:0 24px}
 
-  /* ── the shop ─────────────────────────────────────────── */
-  .shop { display:flex; flex-direction:column; height:100vh; overflow:hidden; }
-  header { display:flex; align-items:center; gap:18px; padding:14px 22px; border-bottom:1px solid var(--edge); }
-  .brand { font-size:19px; font-weight:700; letter-spacing:.02em; }
-  .brand em { color:var(--hi); font-style:normal; }
-  nav { display:flex; gap:4px; margin-left:auto; }
-  nav button { border:0; background:none; padding:7px 12px; border-radius:9px; cursor:pointer; font:inherit; color:inherit; }
-  nav button:hover { background:var(--card); }
-  nav button.active { background:var(--hi); color:#fff; }
-  .badge { background:var(--hi2); color:#fff; border-radius:9px; padding:0 6px; font-size:12px; margin-left:4px; }
-  main { flex:1; overflow:auto; padding:22px; }
+  /* header */
+  header{position:sticky;top:0;z-index:20;background:rgba(250,246,241,.86);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+  .bar{display:flex;align-items:center;gap:22px;height:64px}
+  .brand{font:600 24px/1 var(--serif);letter-spacing:.04em}
+  .brand b{color:var(--wine);font-weight:600}
+  .brand small{display:block;font:400 9px/1 var(--sans);letter-spacing:.32em;color:var(--muted);margin-top:4px;text-transform:uppercase}
+  nav{display:flex;gap:2px;margin-left:auto}
+  nav button{border:0;background:none;font:inherit;color:var(--ink);padding:8px 14px;border-radius:999px;cursor:pointer;transition:.15s}
+  nav button:hover{background:var(--blush)}
+  nav button.active{background:var(--wine);color:#fff}
+  .cartpill{display:inline-flex;align-items:center;gap:6px}
+  .dot{min-width:18px;height:18px;padding:0 5px;border-radius:999px;background:var(--gold);color:#fff;font:600 11px/18px var(--sans);text-align:center}
 
-  .hero { text-align:center; padding:60px 20px; }
-  .hero h1 { font-size:34px; margin:0 0 10px; }
-  .hero p { opacity:.7; max-width:460px; margin:0 auto 26px; }
-  .cta { background:var(--hi); color:#fff; border:0; padding:12px 26px; border-radius:12px; font:inherit; font-weight:600; cursor:pointer; }
+  main{min-height:calc(100vh - 64px - 58px)}
 
-  .toolbar { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:18px; }
-  .toolbar input { padding:9px 12px; border:1px solid var(--edge); border-radius:10px; background:transparent; color:inherit; font:inherit; min-width:220px; }
-  .chip { border:1px solid var(--edge); background:none; color:inherit; padding:6px 12px; border-radius:999px; cursor:pointer; font:inherit; font-size:13px; }
-  .chip.active { background:var(--hi); border-color:var(--hi); color:#fff; }
+  /* hero */
+  .hero{position:relative;overflow:hidden;background:
+     radial-gradient(120% 120% at 12% -10%,var(--blush),transparent 55%),
+     radial-gradient(120% 120% at 100% 0%,#f6efe2,transparent 50%),
+     linear-gradient(180deg,#fff8f2,var(--bg));border-bottom:1px solid var(--line)}
+  .hero .wrap{display:grid;grid-template-columns:1.1fr .9fr;gap:20px;align-items:center;padding:56px 24px 60px}
+  .kicker{font:600 12px/1 var(--sans);letter-spacing:.28em;color:var(--gold);text-transform:uppercase}
+  .hero h1{font:600 clamp(34px,5vw,54px)/1.05 var(--serif);margin:14px 0 12px;letter-spacing:-.01em}
+  .hero p{color:var(--muted);font-size:17px;max-width:44ch;margin:0 0 26px}
+  .cta{display:inline-flex;align-items:center;gap:9px;background:var(--wine);color:#fff;border:0;padding:14px 26px;border-radius:999px;font:600 15px var(--sans);cursor:pointer;box-shadow:var(--shadow-sm);transition:.18s}
+  .cta:hover{background:var(--wine-d);transform:translateY(-1px)}
+  .cta.ghost{background:transparent;color:var(--wine);box-shadow:none;border:1.5px solid var(--wine)}
+  .heroart{display:flex;justify-content:center;gap:-20px}
+  .heroart .fig{filter:drop-shadow(0 22px 26px rgba(90,30,45,.22))}
+  .heroart .fig:nth-child(1){transform:rotate(-6deg) translateY(8px)}
+  .heroart .fig:nth-child(2){transform:scale(1.12);z-index:2}
+  .heroart .fig:nth-child(3){transform:rotate(6deg) translateY(8px)}
+  @media(max-width:820px){.hero .wrap{grid-template-columns:1fr}.heroart{display:none}}
 
-  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:16px; }
-  .card { border:1px solid var(--edge); border-radius:14px; overflow:hidden; background:var(--card); display:flex; flex-direction:column; }
-  .swatch { height:130px; display:flex; align-items:center; justify-content:center; font-size:42px; }
-  .card .info { padding:10px 12px 12px; display:flex; flex-direction:column; gap:4px; flex:1; }
-  .card .name { font-weight:600; font-size:14px; min-height:2.6em; }
-  .card .meta, .meta { font-size:12.5px; opacity:.65; }
-  .card .row { display:flex; align-items:center; justify-content:space-between; margin-top:auto; }
-  .price { font-weight:700; }
-  .mini { border:1px solid var(--hi); color:var(--hi); background:none; border-radius:8px; padding:5px 12px; cursor:pointer; font:inherit; font-size:13px; font-weight:600; }
+  /* section shell */
+  .section{padding:34px 0 60px}
+  .head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin-bottom:20px}
+  .head h2{font:600 26px/1 var(--serif);margin:0}
+  .head .sub{color:var(--muted);font-size:14px}
 
-  .product { display:flex; gap:26px; flex-wrap:wrap; }
-  .product .swatch { width:280px; height:280px; border-radius:16px; font-size:96px; flex-shrink:0; }
-  .product h2 { margin:2px 0 8px; }
-  .lineitem { display:flex; align-items:center; gap:12px; padding:10px 0; border-bottom:1px solid var(--edge); }
-  .lineitem .sw { width:44px; height:44px; border-radius:9px; display:flex; align-items:center; justify-content:center; font-size:20px; }
-  .total { font-size:18px; font-weight:700; margin:14px 0; }
-  .empty { opacity:.55; padding:30px 0; }
-  .note { border-left:3px solid var(--hi2); padding:6px 10px; margin:10px 0; font-size:13.5px; background:var(--card); border-radius:0 8px 8px 0; }
-  .order { display:flex; align-items:center; gap:14px; padding:11px 0; border-bottom:1px solid var(--edge); }
+  /* toolbar */
+  .toolbar{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:22px}
+  .search{display:flex;align-items:center;gap:8px;background:var(--card);border:1px solid var(--line);border-radius:999px;padding:6px 8px 6px 16px;box-shadow:var(--shadow-sm)}
+  .search input{border:0;background:none;font:inherit;color:inherit;outline:none;min-width:230px}
+  .search button{border:0;background:var(--ink);color:#fff;border-radius:999px;padding:8px 16px;font:600 13px var(--sans);cursor:pointer}
+  .chips{display:flex;gap:8px;flex-wrap:wrap}
+  .chip{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:999px;padding:7px 13px;font:500 13px var(--sans);cursor:pointer;transition:.15s}
+  .chip:hover{border-color:var(--wine)}
+  .chip.active{background:var(--wine);border-color:var(--wine);color:#fff}
+  .chip .sw{width:12px;height:12px;border-radius:999px;box-shadow:inset 0 0 0 1px rgba(0,0,0,.08)}
 
-  footer { padding:8px 22px; border-top:1px solid var(--edge); font-size:12px; opacity:.65; display:flex; gap:16px; flex-wrap:wrap; }
+  /* product grid */
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(215px,1fr));gap:22px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:18px;overflow:hidden;box-shadow:var(--shadow-sm);transition:.2s;cursor:pointer;display:flex;flex-direction:column}
+  .card:hover{transform:translateY(-4px);box-shadow:var(--shadow)}
+  .frame{position:relative;aspect-ratio:4/5;display:flex;align-items:center;justify-content:center;overflow:hidden}
+  .frame svg{width:74%;height:auto}
+  .tag{position:absolute;top:12px;left:12px;background:#fff;color:var(--wine);font:600 11px var(--sans);letter-spacing:.04em;padding:4px 9px;border-radius:999px;box-shadow:var(--shadow-sm)}
+  .body{padding:13px 15px 16px;display:flex;flex-direction:column;gap:5px;flex:1}
+  .nm{font:600 15px/1.3 var(--serif);min-height:2.5em}
+  .mt{color:var(--muted);font-size:12.5px;text-transform:capitalize}
+  .foot{display:flex;align-items:center;justify-content:space-between;margin-top:auto;padding-top:8px}
+  .price{font:600 16px var(--sans)}
+  .add{border:0;background:var(--blush);color:var(--wine);font:600 13px var(--sans);border-radius:999px;padding:8px 15px;cursor:pointer;transition:.15s}
+  .add:hover{background:var(--wine);color:#fff}
+  .empty{color:var(--muted);text-align:center;padding:60px 0}
 
-  /* ── the assistant dock ───────────────────────────────── */
-  .dock { border-left:1px solid var(--edge); display:flex; flex-direction:column; height:100vh; }
-  .dock h2 { font-size:13px; text-transform:uppercase; letter-spacing:.06em; opacity:.6; margin:0; padding:14px 16px 8px; }
-  #log { flex:1; overflow:auto; padding:6px 14px; display:flex; flex-direction:column; gap:9px; }
-  .msg { padding:8px 12px; border-radius:12px; max-width:88%; white-space:pre-wrap; font-size:14px; }
-  .user { align-self:flex-end; background:var(--hi); color:#fff; }
-  .bot  { align-self:flex-start; background:#8882; }
-  .sys  { align-self:center; font-size:12px; opacity:.65; text-align:center; }
-  .working { opacity:.9; font-weight:600; color:var(--hi2); }
-  @keyframes pulse { 0%,100%{opacity:.55} 50%{opacity:1} }
-  .working { animation:pulse 1.1s ease-in-out infinite; }
-  .confirm { align-self:center; background:#f39c1233; border:1px solid #f39c12; border-radius:12px; padding:11px; text-align:center; max-width:94%; font-size:14px; }
-  .confirm button { margin:8px 5px 0; padding:6px 16px; border-radius:8px; border:0; cursor:pointer; font-weight:600; font:inherit; }
-  .yes { background:#27ae60; color:#fff; } .no { background:#8884; color:inherit; }
-  #f { display:flex; gap:8px; padding:12px 14px; border-top:1px solid var(--edge); }
-  #m { flex:1; padding:9px 12px; border-radius:10px; border:1px solid var(--edge); background:transparent; color:inherit; font:inherit; }
-  .send { padding:0 16px; border-radius:10px; border:0; background:var(--hi); color:#fff; cursor:pointer; font-weight:600; }
+  /* product detail */
+  .detail{display:grid;grid-template-columns:.9fr 1.1fr;gap:40px;align-items:center}
+  @media(max-width:760px){.detail{grid-template-columns:1fr}}
+  .stage{aspect-ratio:1;border-radius:22px;display:flex;align-items:center;justify-content:center;box-shadow:var(--shadow)}
+  .stage svg{width:56%}
+  .detail h2{font:600 34px/1.05 var(--serif);margin:6px 0 6px}
+  .sizes{display:flex;gap:8px;margin:16px 0 22px}
+  .sizes span{width:40px;height:40px;display:grid;place-items:center;border:1px solid var(--line);border-radius:12px;font:600 13px var(--sans);background:var(--card)}
+  .sizes span.on{border-color:var(--wine);background:var(--wine);color:#fff}
+  .bignum{font:600 26px var(--sans);color:var(--wine)}
+
+  /* cart / checkout / orders */
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:18px;box-shadow:var(--shadow-sm);padding:8px 20px}
+  .li{display:flex;align-items:center;gap:16px;padding:14px 0;border-bottom:1px solid var(--line)}
+  .li:last-child{border-bottom:0}
+  .li .mini{width:52px;height:64px;border-radius:12px;display:flex;align-items:center;justify-content:center}
+  .li .mini svg{width:70%}
+  .li .grow{flex:1}
+  .summary{display:flex;align-items:center;justify-content:space-between;margin:22px 0}
+  .summary .big{font:600 22px var(--serif)}
+  .note{display:flex;gap:10px;align-items:flex-start;background:var(--blush);border-radius:14px;padding:12px 16px;margin-top:16px;font-size:14px;color:var(--wine-d)}
+  .order{display:flex;align-items:center;gap:14px;padding:16px 0;border-bottom:1px solid var(--line)}
+  .status{margin-left:auto;font:600 12px var(--sans);text-transform:uppercase;letter-spacing:.05em;color:var(--gold);background:#fff6e6;padding:5px 11px;border-radius:999px}
+
+  footer{border-top:1px solid var(--line);color:var(--muted);font-size:12.5px}
+  footer .wrap{display:flex;gap:18px;flex-wrap:wrap;height:57px;align-items:center}
+  footer b{color:var(--ink)}
+
+  /* ── floating assistant popup ── */
+  .fab{position:fixed;right:24px;bottom:24px;z-index:40;display:inline-flex;align-items:center;gap:10px;background:var(--wine);color:#fff;border:0;border-radius:999px;padding:14px 20px;font:600 15px var(--sans);cursor:pointer;box-shadow:0 16px 34px -12px rgba(120,30,60,.6);transition:.2s}
+  .fab:hover{background:var(--wine-d);transform:translateY(-2px)}
+  .fab .pulse{width:9px;height:9px;border-radius:999px;background:#7CFFB2;box-shadow:0 0 0 0 rgba(124,255,178,.7);animation:beat 1.8s infinite}
+  @keyframes beat{0%{box-shadow:0 0 0 0 rgba(124,255,178,.6)}70%{box-shadow:0 0 0 9px rgba(124,255,178,0)}100%{box-shadow:0 0 0 0 rgba(124,255,178,0)}}
+
+  .modal{position:fixed;right:24px;bottom:24px;z-index:41;width:390px;max-width:calc(100vw - 32px);height:600px;max-height:calc(100vh - 48px);background:var(--card);border:1px solid var(--line);border-radius:20px;box-shadow:0 30px 70px -20px rgba(60,20,30,.5);display:flex;flex-direction:column;overflow:hidden;transform-origin:bottom right;animation:pop .22s cubic-bezier(.2,.9,.3,1.2)}
+  @keyframes pop{from{opacity:0;transform:translateY(14px) scale(.96)}to{opacity:1;transform:none}}
+  .mhead{display:flex;align-items:center;gap:11px;padding:15px 16px;background:linear-gradient(135deg,var(--wine),var(--wine-d));color:#fff}
+  .mhead .av{width:34px;height:34px;border-radius:999px;background:rgba(255,255,255,.18);display:grid;place-items:center;font-size:17px}
+  .mhead .t{font:600 15px var(--sans);line-height:1.15}
+  .mhead .t small{display:block;font-weight:400;opacity:.8;font-size:11px}
+  .mhead .x{margin-left:auto;background:rgba(255,255,255,.16);border:0;color:#fff;width:30px;height:30px;border-radius:999px;font-size:15px;cursor:pointer}
+  .mhead .x:hover{background:rgba(255,255,255,.3)}
+  #log{flex:1;overflow:auto;padding:16px 15px;display:flex;flex-direction:column;gap:10px;background:
+    radial-gradient(140% 60% at 100% 0%,var(--blush),transparent 60%),var(--card)}
+  .msg{padding:9px 13px;border-radius:15px;max-width:86%;white-space:pre-wrap;font-size:14px;line-height:1.5;box-shadow:var(--shadow-sm)}
+  .user{align-self:flex-end;background:var(--wine);color:#fff;border-bottom-right-radius:5px}
+  .bot{align-self:flex-start;background:#fff;border:1px solid var(--line);border-bottom-left-radius:5px}
+  .sys{align-self:center;font-size:12px;color:var(--muted);text-align:center}
+  .working{color:var(--wine);font-weight:600;animation:fade 1.1s ease-in-out infinite}
+  @keyframes fade{0%,100%{opacity:.5}50%{opacity:1}}
+  .confirm{align-self:stretch;background:#fff;border:1px solid var(--gold);border-radius:15px;padding:14px;text-align:center;font-size:14px;box-shadow:var(--shadow-sm)}
+  .confirm .q{margin-bottom:10px}
+  .confirm button{margin:0 5px;padding:8px 18px;border-radius:10px;border:0;cursor:pointer;font:600 14px var(--sans)}
+  .yes{background:#1e9e5a;color:#fff}.no{background:#efe7e0;color:var(--ink)}
+  form{display:flex;gap:8px;padding:12px;border-top:1px solid var(--line);background:var(--card)}
+  #m{flex:1;padding:11px 14px;border-radius:12px;border:1px solid var(--line);background:var(--bg);font:inherit;color:inherit;outline:none}
+  #m:focus{border-color:var(--wine)}
+  .send{border:0;background:var(--wine);color:#fff;border-radius:12px;padding:0 16px;font:600 14px var(--sans);cursor:pointer}
+  [hidden]{display:none!important}
 </style>
 </head>
 <body>
-<div class="shop">
-  <header>
-    <div class="brand">Maison <em>Dresses</em></div>
-    <nav id="nav"></nav>
-  </header>
-  <main id="main"></main>
-  <footer><span id="whereami"></span><span id="gapcount"></span><span>you and the assistant share one live session</span></footer>
+<header><div class="wrap bar">
+  <div class="brand"><b>Maison</b><small>Modern Dresses</small></div>
+  <nav id="nav"></nav>
+</div></header>
+
+<main id="main"></main>
+
+<footer><div class="wrap">
+  <span id="whereami"></span><span id="gapcount"></span>
+  <span>you &amp; the assistant share <b>one live session</b></span>
+</div></footer>
+
+<button id="fab" class="fab"><span class="pulse"></span> Ask our stylist</button>
+<div id="modal" class="modal" hidden>
+  <div class="mhead">
+    <div class="av">✨</div>
+    <div class="t">Maison Stylist<small>powered by Claude Opus</small></div>
+    <button id="mx" class="x">✕</button>
+  </div>
+  <div id="log"><div class="sys">Hi! Ask me to find and buy a dress — try "find me a red dress under $150 and buy the cheapest one".</div></div>
+  <form id="f"><input id="m" autocomplete="off" placeholder="Message the stylist…" /><button class="send">Send</button></form>
 </div>
-<div class="dock">
-  <h2>Shop assistant · Claude Opus</h2>
-  <div id="log"><div class="sys">Ask me anything — "find me a red dress under $150 and buy it", or "where is my order?"</div></div>
-  <form id="f"><input id="m" autocomplete="off" placeholder="Message the assistant…" /><button class="send">Send</button></form>
-</div>
+
 <script>
-const SWATCH_BG = { white:'linear-gradient(135deg,#f6f4ef,#dcd8cf)', black:'linear-gradient(135deg,#3a3a40,#17171c)',
-  red:'linear-gradient(135deg,#e74c3c,#8e2418)', blue:'linear-gradient(135deg,#5dade2,#21618c)',
-  green:'linear-gradient(135deg,#58d68d,#1e8449)', pink:'linear-gradient(135deg,#f5b7d0,#d4638f)',
-  yellow:'linear-gradient(135deg,#f7dc6f,#d4ac0d)' };
-const COLORS = ['red','black','white','blue','green','pink','yellow'];
-const PAGES = [['home','Home'],['catalog','Dresses'],['cart','Cart'],['orders','Orders']];
-let view = null;
-let searchDraft = '';
+var PAL = { red:['#e8556d','#a11f3c'], black:['#454049','#1b1a20'], white:['#fbf7f2','#dcd3c8'],
+  blue:['#5aa6e0','#215b96'], green:['#5cc98a','#1f8a54'], pink:['#f4a6c4','#d16295'],
+  yellow:['#f6d365','#d9a521'] };
+var COLORS = ['red','black','white','blue','green','pink','yellow'];
+var PAGES = [['home','Home'],['catalog','Dresses'],['cart','Cart'],['orders','Orders']];
+var view = null, searchDraft = '', lastVersion = -1, unread = false;
 
-const $ = (id) => document.getElementById(id);
-const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text !== undefined) n.textContent = text; return n; };
-async function post(url, body){ const r = await fetch(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)}); return r.json(); }
-async function app(method, args){ const r = await post('/api/app',{method,args}); if(!r.ok && r.error) toast('⚠ ' + r.error); await refresh(); }
-function toast(text){ const d = el('div','sys',text); $('log').appendChild(d); $('log').scrollTop = 1e9; }
+function $(id){ return document.getElementById(id); }
+function el(tag,cls,text){ var n=document.createElement(tag); if(cls)n.className=cls; if(text!==undefined)n.textContent=text; return n; }
+async function post(url,body){ var r=await fetch(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)}); return r.json(); }
+async function app(method,args){ var r=await post('/api/app',{method:method,args:args}); if(r&&!r.ok&&r.error) toast('⚠ '+r.error); await refresh(); }
+function toast(t){ var d=el('div','sys',t); $('log').appendChild(d); $('log').scrollTop=1e9; }
 
-function swatch(dress, cls){
-  const s = el('div', cls || 'swatch', '👗');
-  s.style.background = SWATCH_BG[dress.color] || 'var(--card)';
-  if (dress.color === 'white') s.style.color = '#8886';
-  return s;
+// our OWN static svg from a whitelisted palette (never app text) — innerHTML-safe
+function dressSVG(color, w){
+  // color only INDEXES the whitelisted palette; the id is sanitized to alnum so
+  // even a hostile color string can never break out of the SVG markup.
+  var c = PAL[color] || ['#cfc6bd','#a99f95'], id='g'+String(color).replace(/[^a-z0-9]/gi,'')+Math.round(w||0);
+  return '<svg viewBox="0 0 120 160" class="fig" width="'+(w||120)+'" xmlns="http://www.w3.org/2000/svg">'
+    + '<defs><linearGradient id="'+id+'" x1="0" y1="0" x2="1" y2="1">'
+    + '<stop offset="0" stop-color="'+c[0]+'"/><stop offset="1" stop-color="'+c[1]+'"/></linearGradient></defs>'
+    + '<path d="M50 20 Q60 30 70 20" fill="none" stroke="'+c[1]+'" stroke-width="2.4"/>'
+    + '<path d="M48 21 L44 40 M72 21 L76 40" stroke="'+c[1]+'" stroke-width="2.4" fill="none"/>'
+    + '<path d="M44 40 Q60 34 76 40 L67 78 Q104 108 92 146 Q60 158 28 146 Q16 108 53 78 Z" '
+    + 'fill="url(#'+id+')" stroke="'+c[1]+'" stroke-width="1.2"/>'
+    + '<path d="M53 78 Q60 82 67 78 L64 92 Q60 96 56 92 Z" fill="'+c[1]+'" opacity=".35"/>'
+    + '<path d="M53 78 Q30 108 34 143 Q46 149 52 146 Q40 108 60 82 Z" fill="#fff" opacity=".14"/>'
+    + '</svg>';
+}
+function swatchEl(color, w, radius){
+  var d=el('div'); d.style.background='linear-gradient(150deg,'+(PAL[color]?PAL[color][0]:'#eee')+'22,'+(PAL[color]?PAL[color][1]:'#ddd')+'14)';
+  d.innerHTML=dressSVG(color, w); if(radius)d.style.borderRadius=radius; return d;
 }
 
 function renderNav(){
-  const nav = $('nav'); nav.textContent = '';
-  for (const [page, label] of PAGES){
-    const b = el('button', view && view.node === page ? 'active' : '', label);
-    if (page === 'cart' && view && view.cart.length){ b.appendChild(el('span','badge', String(view.cart.length))); }
-    b.onclick = () => page === 'catalog' ? openCatalog() : app('navigate',{page});
+  var nav=$('nav'); nav.textContent='';
+  PAGES.forEach(function(p){
+    var b=el('button', view&&view.node===p[0]?'active':'', p[1]);
+    if(p[0]==='cart'&&view&&view.cart.length){ b.textContent=''; var s=el('span','cartpill'); s.appendChild(el('span',null,'Cart')); s.appendChild(el('span','dot',String(view.cart.length))); b.appendChild(s); if(view.node==='cart')b.classList.add('active'); }
+    b.onclick=function(){ p[0]==='catalog'?openCatalog():app('navigate',{page:p[0]}); };
     nav.appendChild(b);
-  }
+  });
 }
+async function openCatalog(){ await app('browseCatalog'); if(view&&view.results.length===0) await app('search',{query:''}); }
 
-async function openCatalog(){
-  await app('browseCatalog');
-  if (view && view.results.length === 0) await app('search',{query: ''}); // browsing shows everything
-}
+function wrap(node){ var w=el('div','wrap'); w.appendChild(node); return w; }
 
 function renderMain(){
-  const m = $('main'); m.textContent = '';
-  if (!view) return;
-  const page = view.node;
+  var m=$('main'); m.textContent=''; if(!view) return; var page=view.node;
 
-  if (page === 'home'){
-    const hero = el('div','hero');
-    hero.appendChild(el('h1','', 'Dresses for every day it matters.'));
-    hero.appendChild(el('p','', 'Browse the collection yourself, or ask the assistant on the right to find, filter, and buy for you — every action lands in the same live session.'));
-    const cta = el('button','cta','Shop dresses'); cta.onclick = openCatalog; hero.appendChild(cta);
-    m.appendChild(hero);
+  if(page==='home'){
+    var hero=el('div','hero'), hw=el('div','wrap');
+    var left=el('div');
+    left.appendChild(el('div','kicker','The Spring Edit'));
+    left.appendChild(el('h1','','Dresses for every day it matters.'));
+    left.appendChild(el('p','','Browse the collection yourself — or ask our AI stylist to find, filter, and check out for you. Every move lands in the same live session.'));
+    var row=el('div'); var shop=el('button','cta','Shop the collection  →'); shop.onclick=openCatalog;
+    var ask=el('button','cta ghost','Ask the stylist'); ask.style.marginLeft='10px'; ask.onclick=openModal;
+    row.append(shop,ask); left.appendChild(row);
+    var art=el('div','heroart'); ['pink','red','black'].forEach(function(c){ art.innerHTML+=dressSVG(c,150); });
+    hw.append(left,art); hero.appendChild(hw); m.appendChild(hero);
+
+    var sec=el('div','section'), sw=el('div','wrap');
+    var hd=el('div','head'); var h2=el('div'); h2.appendChild(el('h2','','Just in')); hd.appendChild(h2);
+    var more=el('button','chip','View all'); more.onclick=openCatalog; hd.appendChild(more);
+    sw.appendChild(hd);
+    var grid=el('div','grid'); DUMMY_PREVIEW().forEach(function(d){ grid.appendChild(previewCard(d)); });
+    sw.appendChild(grid); sec.appendChild(sw); m.appendChild(sec);
     return;
   }
 
-  if (page === 'catalog'){
-    const bar = el('div','toolbar');
-    const input = el('input'); input.placeholder = 'Search dresses… (e.g. silk, red)'; input.value = searchDraft;
-    input.oninput = () => { searchDraft = input.value; };
-    input.onkeydown = (e) => { if (e.key === 'Enter'){ e.preventDefault(); app('search',{query: input.value}); } };
-    const go = el('button','mini','Search'); go.onclick = () => app('search',{query: input.value});
-    bar.append(input, go);
-    for (const c of COLORS){
-      const chip = el('button', 'chip' + (view.activeColor === c ? ' active' : ''), c);
-      chip.onclick = () => app('filterByColor',{color: c});
-      bar.appendChild(chip);
-    }
-    const all = el('button','chip','all'); all.onclick = () => app('search',{query: ''}); bar.appendChild(all);
-    m.appendChild(bar);
+  var sec=el('div','section wrap');
 
-    if (view.results.length === 0){
-      m.appendChild(el('div','empty','No dresses match — try another search, or press "all".'));
-      return;
-    }
-    const grid = el('div','grid');
-    for (const d of view.results){
-      const card = el('div','card');
-      card.appendChild(swatch(d));
-      const info = el('div','info');
-      info.appendChild(el('div','name', d.name));           // untrusted text → textContent
-      info.appendChild(el('div','meta', d.color + ' · size ' + d.size));
-      const row = el('div','row');
-      row.appendChild(el('span','price', '$' + d.price));
-      const viewBtn = el('button','mini','View'); viewBtn.onclick = () => app('openDress',{dressId: d.id});
-      row.appendChild(viewBtn);
-      info.appendChild(row);
-      card.appendChild(info);
-      grid.appendChild(card);
-    }
-    m.appendChild(grid);
-    return;
+  if(page==='catalog'){
+    var hd=el('div','head'); var hl=el('div'); hl.appendChild(el('h2','','Dresses'));
+    hl.appendChild(el('div','sub', view.results.length+' style'+(view.results.length===1?'':'s')+(view.activeColor?' · '+view.activeColor:'')));
+    hd.appendChild(hl); sec.appendChild(hd);
+
+    var bar=el('div','toolbar');
+    var sb=el('div','search'); var inp=el('input'); inp.placeholder='Search silk, red, linen…'; inp.value=searchDraft;
+    inp.oninput=function(){ searchDraft=inp.value; };
+    inp.onkeydown=function(e){ if(e.key==='Enter'){ e.preventDefault(); app('search',{query:inp.value}); } };
+    var sgo=el('button',null,'Search'); sgo.onclick=function(){ app('search',{query:inp.value}); };
+    sb.append(inp,sgo); bar.appendChild(sb);
+    var chips=el('div','chips');
+    COLORS.forEach(function(c){
+      var ch=el('button','chip'+(view.activeColor===c?' active':'')); var sw2=el('span','sw'); sw2.style.background=PAL[c]?PAL[c][0]:'#ccc'; ch.append(sw2, el('span',null,c));
+      ch.onclick=function(){ app('filterByColor',{color:c}); }; chips.appendChild(ch);
+    });
+    var all=el('button','chip','All'); all.onclick=function(){ app('search',{query:''}); }; chips.appendChild(all);
+    bar.appendChild(chips); sec.appendChild(bar);
+
+    if(view.results.length===0){ sec.appendChild(el('div','empty','No dresses match — try another search, or press “All”.')); m.appendChild(sec); return; }
+    var grid=el('div','grid'); view.results.forEach(function(d){ grid.appendChild(productCard(d)); });
+    sec.appendChild(grid); m.appendChild(sec); return;
   }
 
-  if (page === 'product'){
-    const d = view.selectedDress;
-    if (!d){ m.appendChild(el('div','empty','No dress selected — go back to the catalog.')); return; }
-    const wrap = el('div','product');
-    wrap.appendChild(swatch(d,'swatch'));
-    const side = el('div');
-    side.appendChild(el('h2','', d.name));
-    side.appendChild(el('div','meta', d.color + ' · size ' + d.size));
-    side.appendChild(el('div','total', '$' + d.price));
-    const add = el('button','cta','Add to cart'); add.onclick = () => app('addToCart');
-    const back = el('button','chip','← back to results'); back.style.marginLeft = '12px';
-    back.onclick = () => app('navigate',{page:'catalog'});
-    side.append(add, back);
-    wrap.appendChild(side);
-    m.appendChild(wrap);
-    return;
+  if(page==='product'){
+    var d=view.selectedDress;
+    if(!d){ sec.appendChild(el('div','empty','No dress selected.')); m.appendChild(sec); return; }
+    var det=el('div','detail');
+    var stage=swatchEl(d.color,undefined,'22px'); stage.className='stage'; stage.style.background='linear-gradient(150deg,'+(PAL[d.color]?PAL[d.color][0]:'#eee')+'2b,'+(PAL[d.color]?PAL[d.color][1]:'#ddd')+'18)';
+    det.appendChild(stage);
+    var info=el('div');
+    info.appendChild(el('div','kicker','Maison Atelier'));
+    info.appendChild(el('h2','',d.name));
+    info.appendChild(el('div','mt',d.color+' · premium fabric'));
+    info.appendChild(el('div','bignum','$'+d.price));
+    var sizes=el('div','sizes'); ['XS','S','M','L'].forEach(function(s){ sizes.appendChild(el('span',s===d.size?'on':'',s)); }); info.appendChild(sizes);
+    var add=el('button','cta','Add to cart'); add.onclick=function(){ app('addToCart'); };
+    var back=el('button','cta ghost','← Back'); back.style.marginLeft='10px'; back.onclick=function(){ app('navigate',{page:'catalog'}); };
+    var r=el('div'); r.append(add,back); info.appendChild(r);
+    det.appendChild(info); sec.appendChild(det); m.appendChild(sec); return;
   }
 
-  if (page === 'cart'){
-    m.appendChild(el('h2','','Your cart'));
-    if (view.cart.length === 0){ m.appendChild(el('div','empty','The cart is empty.')); return; }
-    let total = 0;
-    for (const d of view.cart){
-      total += d.price;
-      const li = el('div','lineitem');
-      li.appendChild(swatch(d,'sw'));
-      li.appendChild(el('span','', d.name));
-      const p = el('span','price','$' + d.price); p.style.marginLeft = 'auto'; li.appendChild(p);
-      m.appendChild(li);
-    }
-    m.appendChild(el('div','total', 'Total: $' + total));
-    const go = el('button','cta','Checkout'); go.onclick = () => app('checkout');
-    m.appendChild(go);
-    return;
+  if(page==='cart'){
+    sec.appendChild(headOnly('Your cart'));
+    if(view.cart.length===0){ sec.appendChild(el('div','empty','Your cart is empty.')); m.appendChild(sec); return; }
+    var panel=el('div','panel'), total=0;
+    view.cart.forEach(function(d){ total+=d.price; var li=el('div','li');
+      var mini=swatchEl(d.color,undefined,'12px'); mini.className='mini'; li.appendChild(mini);
+      var g=el('div','grow'); g.appendChild(el('div','nm',d.name)); g.appendChild(el('div','mt',d.color+' · size '+d.size)); li.appendChild(g);
+      li.appendChild(el('div','price','$'+d.price)); panel.appendChild(li); });
+    sec.appendChild(panel);
+    var sum=el('div','summary'); sum.appendChild(el('span','','Total')); sum.appendChild(el('span','big','$'+total)); sec.appendChild(sum);
+    var go=el('button','cta','Proceed to checkout'); go.onclick=function(){ app('checkout'); }; sec.appendChild(go);
+    m.appendChild(sec); return;
   }
 
-  if (page === 'checkout'){
-    m.appendChild(el('h2','','Checkout'));
-    let total = 0; for (const d of view.cart) total += d.price;
-    m.appendChild(el('div','', view.cart.length + ' item(s)'));
-    m.appendChild(el('div','total','Total: $' + total));
-    const place = el('button','cta','Place order'); place.onclick = () => app('placeOrder');
-    m.appendChild(place);
-    if (view.lastOrder) m.appendChild(el('div','note', 'Order ' + view.lastOrder.id + ' placed — $' + view.lastOrder.total + '. See Orders.'));
-    return;
+  if(page==='checkout'){
+    sec.appendChild(headOnly('Checkout'));
+    var total=0; view.cart.forEach(function(d){ total+=d.price; });
+    var panel=el('div','panel');
+    view.cart.forEach(function(d){ var li=el('div','li'); var mini=swatchEl(d.color,undefined,'12px'); mini.className='mini'; li.appendChild(mini);
+      var g=el('div','grow'); g.appendChild(el('div','nm',d.name)); g.appendChild(el('div','mt','size '+d.size)); li.appendChild(g); li.appendChild(el('div','price','$'+d.price)); panel.appendChild(li); });
+    sec.appendChild(panel);
+    var sum=el('div','summary'); sum.appendChild(el('span','',view.cart.length+' item'+(view.cart.length===1?'':'s'))); sum.appendChild(el('span','big','$'+total)); sec.appendChild(sum);
+    var place=el('button','cta','Place order'); place.onclick=function(){ app('placeOrder'); }; sec.appendChild(place);
+    if(view.lastOrder){ var n=el('div','note'); n.appendChild(el('span',null,'✓')); n.appendChild(el('span',null,'Order '+view.lastOrder.id+' placed — $'+view.lastOrder.total+'. See Orders.')); sec.appendChild(n); }
+    m.appendChild(sec); return;
   }
 
-  if (page === 'orders'){
-    m.appendChild(el('h2','','Your orders'));
-    if (view.orders.length === 0){ m.appendChild(el('div','empty','No orders yet.')); return; }
-    for (const o of view.orders){
-      const row = el('div','order');
-      row.appendChild(el('strong','', o.id));
-      row.appendChild(el('span','meta', o.count + ' item(s) · $' + o.total));
-      const check = el('button','mini','Check status'); check.onclick = () => app('checkOrderStatus',{orderId: o.id});
-      row.appendChild(check);
-      m.appendChild(row);
-    }
-    if (view.orderStatusMessage) m.appendChild(el('div','note', view.orderStatusMessage));
-    return;
+  if(page==='orders'){
+    sec.appendChild(headOnly('Your orders'));
+    if(view.orders.length===0){ sec.appendChild(el('div','empty','No orders yet.')); m.appendChild(sec); return; }
+    var panel=el('div','panel');
+    view.orders.forEach(function(o){ var row=el('div','order');
+      row.appendChild(el('strong',null,o.id)); row.appendChild(el('span','mt',o.count+' item'+(o.count===1?'':'s')+' · $'+o.total));
+      row.appendChild(el('span','status',o.status));
+      var chk=el('button','add','Check status'); chk.onclick=function(){ app('checkOrderStatus',{orderId:o.id}); }; row.appendChild(chk);
+      panel.appendChild(row); });
+    sec.appendChild(panel);
+    if(view.orderStatusMessage){ var n=el('div','note'); n.appendChild(el('span',null,'📦')); n.appendChild(el('span',null,view.orderStatusMessage)); sec.appendChild(n); }
+    m.appendChild(sec); return;
   }
 }
+function headOnly(t){ var hd=el('div','head'); var h=el('div'); h.appendChild(el('h2','',t)); hd.appendChild(h); return hd; }
 
-let lastVersion = -1;
+// Home preview + card builders (preview uses static dummy items; catalog uses live results)
+function DUMMY_PREVIEW(){ return [
+  {id:'d3',name:'Floral Wrap Dress',color:'red',size:'M',price:120},
+  {id:'d10',name:'Blush Tulle Gown',color:'pink',size:'S',price:210},
+  {id:'d2',name:'Evening Silk Gown',color:'black',size:'S',price:249},
+  {id:'d8',name:'Ocean Breeze Maxi',color:'blue',size:'S',price:110}]; }
+function previewCard(d){ var c=productCard(d); c.onclick=openCatalog; return c; }
+function productCard(d){
+  var card=el('div','card');
+  var frame=swatchEl(d.color,undefined); frame.className='frame'; frame.style.background='linear-gradient(150deg,'+(PAL[d.color]?PAL[d.color][0]:'#eee')+'26,'+(PAL[d.color]?PAL[d.color][1]:'#ddd')+'12)';
+  if(d.price>=200){ var tag=el('span','tag','Premium'); frame.appendChild(tag); }
+  card.appendChild(frame);
+  var body=el('div','body'); body.appendChild(el('div','nm',d.name)); body.appendChild(el('div','mt',d.color+' · size '+d.size));
+  var foot=el('div','foot'); foot.appendChild(el('div','price','$'+d.price));
+  var add=el('button','add','View'); add.onclick=function(e){ e.stopPropagation(); app('openDress',{dressId:d.id}); }; foot.appendChild(add);
+  body.appendChild(foot); card.appendChild(body);
+  card.onclick=function(){ app('openDress',{dressId:d.id}); };
+  return card;
+}
+
 async function refresh(){
-  const r = await fetch('/api/view'); view = await r.json();
+  var r=await fetch('/api/view'); view=await r.json();
   renderNav(); renderMain();
-  $('whereami').textContent = 'you are on: ' + view.node + ' (v' + view.version + ')';
-  $('gapcount').textContent = 'gap ledger: ' + view.gaps + ' row(s)';
-  lastVersion = view.version;
+  $('whereami').textContent='you are on: '+view.node+' (v'+view.version+')';
+  $('gapcount').textContent='gap ledger: '+view.gaps+' row'+(view.gaps===1?'':'s');
+  lastVersion=view.version;
 }
-// The agent acts server-side — poll so ITS motion appears on the storefront live.
-setInterval(async () => {
-  try {
-    const r = await fetch('/api/view'); const v = await r.json();
-    if (v.version !== lastVersion){
-      view = v; lastVersion = v.version; renderNav(); renderMain();
-      $('whereami').textContent = 'you are on: ' + v.node + ' (v' + v.version + ')';
-      $('gapcount').textContent = 'gap ledger: ' + v.gaps + ' row(s)';
-    }
-  } catch {}
-}, 1500);
+setInterval(async function(){
+  try{ var r=await fetch('/api/view'); var v=await r.json();
+    if(v.version!==lastVersion){ view=v; lastVersion=v.version; renderNav(); renderMain();
+      $('whereami').textContent='you are on: '+v.node+' (v'+v.version+')';
+      $('gapcount').textContent='gap ledger: '+v.gaps+' row'+(v.gaps===1?'':'s'); }
+  }catch(e){}
+}, 1400);
 
-/* ── chat dock ─────────────────────────────────────────── */
-function add(cls, text){ const d = el('div','msg ' + cls, text); $('log').appendChild(d); $('log').scrollTop = 1e9; return d; }
+/* ── assistant popup ── */
+function openModal(){ $('modal').hidden=false; $('fab').hidden=true; unread=false; setTimeout(function(){ $('m').focus(); },50); $('log').scrollTop=1e9; }
+function closeModal(){ $('modal').hidden=true; $('fab').hidden=false; }
+$('fab').onclick=openModal; $('mx').onclick=closeModal;
 
-// Run a turn with a LIVE status line: poll /api/activity and show the agent's
-// latest step ("Searching the catalog…") until the turn resolves.
+function add(cls,text){ var d=el('div','msg '+cls,text); $('log').appendChild(d); $('log').scrollTop=1e9; return d; }
 async function withStatus(request){
-  const status = add('sys','…thinking'); status.classList.add('working');
-  let polling = true;
-  (async () => {
-    while (polling){
-      try { const a = await (await fetch('/api/activity')).json();
-        if (a.steps && a.steps.length) status.textContent = '⋯ ' + a.steps[a.steps.length - 1]; } catch {}
-      await new Promise(r => setTimeout(r, 350));
-    }
-  })();
-  try { return await request(); } finally { polling = false; status.remove(); }
+  var status=add('sys','…thinking'); status.classList.add('working'); var polling=true;
+  (async function(){ while(polling){ try{ var a=await (await fetch('/api/activity')).json(); if(a.steps&&a.steps.length) status.textContent='⋯ '+a.steps[a.steps.length-1]; }catch(e){} await new Promise(function(r){setTimeout(r,350);}); } })();
+  try{ return await request(); } finally { polling=false; status.remove(); }
 }
-
 function renderTurn(turn){
-  if (turn.error){ add('sys','⚠ ' + turn.error); return; }
-  if (turn.type === 'confirm'){
-    const box = el('div','confirm');
-    box.appendChild(el('div','', turn.summary));            // model/runtime text → textContent
-    const yes = el('button','yes','Approve'); const no = el('button','no','Decline');
-    box.append(yes, no); $('log').appendChild(box); $('log').scrollTop = 1e9;
-    const answer = async (ok) => { box.remove(); add('sys', ok ? '✔ approved' : '✘ declined');
-      renderTurn(await withStatus(() => post('/api/confirm',{approved: ok}))); refresh(); };
-    yes.onclick = () => answer(true); no.onclick = () => answer(false);
-    return;
+  if(turn.error){ add('sys','⚠ '+turn.error); return; }
+  if(turn.type==='confirm'){
+    if($('modal').hidden) openModal();
+    var box=el('div','confirm'); box.appendChild(el('div','q',turn.summary));
+    var yes=el('button','yes','Approve'), no=el('button','no','Decline'); box.append(yes,no);
+    $('log').appendChild(box); $('log').scrollTop=1e9;
+    var answer=async function(ok){ box.remove(); add('sys', ok?'✔ approved':'✘ declined'); renderTurn(await withStatus(function(){ return post('/api/confirm',{approved:ok}); })); refresh(); };
+    yes.onclick=function(){ answer(true); }; no.onclick=function(){ answer(false); }; return;
   }
-  add('bot', turn.text);
+  add('bot',turn.text);
+  if($('modal').hidden){ unread=true; }
 }
-$('f').onsubmit = async (e) => {
-  e.preventDefault();
-  const msg = $('m').value.trim(); if (!msg) return; $('m').value = '';
-  add('user', msg);
-  const turn = await withStatus(() => post('/api/chat',{message: msg}));
+$('f').onsubmit=async function(e){
+  e.preventDefault(); var msg=$('m').value.trim(); if(!msg) return; $('m').value='';
+  add('user',msg); var turn=await withStatus(function(){ return post('/api/chat',{message:msg}); });
   renderTurn(turn); refresh();
 };
 
