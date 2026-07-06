@@ -40,6 +40,7 @@ const require2 = createRequire(import.meta.url);
 const ATUI_UMD = readFileSync(require2.resolve('agentthinkingui/umd'), 'utf8');
 const ATUI_CSS = readFileSync(require2.resolve('agentthinkingui/styles.css'), 'utf8');
 const EXPLAIN_MODEL = process.env['ANTHROPIC_MODEL'] ?? 'claude-opus-4-8';
+const SCORE_MODEL = process.env['SCORE_MODEL'] ?? 'claude-haiku-4-5'; // cheap judge for tool scoring
 
 // Semantic tool-choice scoring is opt-in: present only with an embedding model
 // (OPENAI_API_KEY). Null ⇒ the debugger shows "Semantic score: off" (never faked).
@@ -132,6 +133,44 @@ const server = http.createServer((req, res) => {
       }
       if (req.method === 'GET' && req.url === '/vendor/atui.css') {
         return send(res, 200, ATUI_CSS, 'text/css; charset=utf-8');
+      }
+      if (req.method === 'POST' && req.url === '/api/score') {
+        // LLM-as-judge: rate each offered tool 0..1 for THIS choice, from the same
+        // context the model chose with. Powers atui's "LLM" strategy ranked bars —
+        // the only scorer that ranks a procedural/next-step pick correctly.
+        const { context, tools } = (await readBody(req)) as {
+          context?: string;
+          tools?: { name: string; description?: string }[];
+        };
+        const catalog = (tools ?? []).map((t) => `- ${t.name}: ${t.description ?? ''}`).join('\n');
+        try {
+          const client = new Anthropic();
+          const message = await client.messages.create({
+            model: SCORE_MODEL,
+            max_tokens: 900,
+            system:
+              'You are a tool-selection analyst. Given the choice context and the offered tools, rate how relevant ' +
+              'each tool is to the decision the agent faces right now: 0 = irrelevant, 1 = the obvious call. Judge ' +
+              'task fit and the natural next step, not popularity. Scores are independent (do not force them to sum ' +
+              'to 1). Reply with ONLY a JSON object: {"scores":[{"name":string,"relevance":number,"rationale":string}]}.',
+            messages: [
+              { role: 'user', content: `CONTEXT:\n${String(context ?? '')}\n\nOFFERED TOOLS:\n${catalog}\n\nScore each offered tool.` },
+            ],
+          });
+          const text = message.content.map((b) => (b.type === 'text' ? b.text : '')).join('');
+          const json = text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1);
+          const parsed = JSON.parse(json) as {
+            scores?: { name: string; relevance?: number; score?: number; rationale?: string }[];
+          };
+          const scores = (parsed.scores ?? []).map((s) => ({
+            name: s.name,
+            score: s.relevance ?? s.score ?? 0,
+            rationale: s.rationale,
+          }));
+          return send(res, 200, { scores });
+        } catch (error) {
+          return send(res, 200, { error: String(error instanceof Error ? error.message : error) });
+        }
       }
       if (req.method === 'POST' && req.url === '/api/explain') {
         // The REAL "why this tool?" — hand atui's prepared prompt (task +

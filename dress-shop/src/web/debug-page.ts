@@ -87,7 +87,7 @@ export const DEBUG_PAGE = /* html */ `<!doctype html>
     var live = running || (EMBED && last && last.kind!=='answer');
     root.render(React.createElement(window.AgentThinkingUI, {
       trace: trace, live: live, theme:{ mode:'light' }, labels:{ agent:'Maison Stylist' }, toolMenu:'rack',
-      onExplain: onExplain
+      onExplain: onExplain, onScore: onScore
     }));
   }
   // The REAL "why this tool?": hand atui's prepared prompt to Claude (server-side,
@@ -95,6 +95,14 @@ export const DEBUG_PAGE = /* html */ `<!doctype html>
   async function onExplain(args){
     try{ var r=await post('/api/explain', { prompt: args.prompt, kind: args.kind }); return { reason: r.reason || r.error || '(no explanation)' }; }
     catch(e){ return { reason: '⚠ '+e }; }
+  }
+  // The LLM-as-judge for the "LLM" strategy: the model rates each offered tool
+  // 0..1 from the same context it chose with (server-side Haiku call).
+  async function onScore(args){
+    var ctx = [args.step && args.step.brain, args.trace && args.trace.task].filter(Boolean).join(' ');
+    var tools = (args.tools||[]).map(function(t){ return { name:t.name, description:t.description }; });
+    try{ var r=await post('/api/score', { context: ctx, tools: tools }); return { scores: r.scores || [] }; }
+    catch(e){ return { scores: [] }; }
   }
   async function pull(){ try{ var t=await (await fetch('/api/trace')).json(); if(t){ trace=t; render(); } }catch(e){} }
 
