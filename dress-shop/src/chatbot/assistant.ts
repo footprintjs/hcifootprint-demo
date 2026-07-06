@@ -18,6 +18,8 @@
  */
 import { Agent, askHuman, defineTool, isPaused } from 'agentfootprint';
 import { anthropic } from 'agentfootprint/llm-providers';
+import { agentThinkingTrace } from 'agentfootprint/observe';
+import type { AttTrace } from 'agentfootprint/observe';
 import type { Session } from 'hcifootprint';
 import type { AppMcp } from '../agent-layer/mcp-bridge.js';
 
@@ -69,6 +71,11 @@ export interface Assistant {
   confirm(approved: boolean, answerText?: string): Promise<TurnResult>;
   /** True while a confirmation is outstanding. */
   readonly awaitingConfirmation: boolean;
+  /**
+   * The current turn's reasoning as an AgentThinkingUI trace (prompt → ask →
+   * return → answer beats). Grows live during a run — the /debug page polls it.
+   */
+  trace(): AttTrace;
 }
 
 /** Shopper-friendly status per action id — what the agent is doing, in plain words. */
@@ -106,6 +113,12 @@ export function createAssistant(session: Session, appMcp: AppMcp, options?: Assi
   const transcript: string[] = [];
   let pausedCheckpoint: unknown = null;
   let pausedAffordanceId: string | null = null;
+  let lastTask = '';
+
+  // Captures each run's reasoning as an AgentThinkingUI trace — attached to the
+  // agent below via .recorder(). It maps agentfootprint's emit stream (llm/tool/
+  // thinking beats) straight into atui's Trace shape; no adapter needed.
+  const think = agentThinkingTrace({ agent: 'Maison Stylist', model: MODEL, asker: 'you' });
 
   // The app-facing tools come straight from the MCP server's tools/list.
   const mcpNameByApiName = new Map<string, string>();
@@ -202,7 +215,8 @@ export function createAssistant(session: Session, appMcp: AppMcp, options?: Assi
     model: 'anthropic',
   })
     .system(SYSTEM)
-    .maxIterations(16);
+    .maxIterations(16)
+    .recorder(think);
   for (const tool of tools) agentBuilder = agentBuilder.tool(tool);
   const agent = agentBuilder.build();
 
@@ -223,11 +237,16 @@ export function createAssistant(session: Session, appMcp: AppMcp, options?: Assi
     get awaitingConfirmation() {
       return pausedCheckpoint !== null;
     },
+    trace() {
+      return think.getTrace({ task: lastTask });
+    },
     async send(userMessage: string): Promise<TurnResult> {
       const message =
         (transcript.length > 0 ? `Recent conversation:\n${transcript.slice(-6).join('\n')}\n\n` : '') +
         `User: ${userMessage}`;
       transcript.push(`User: ${userMessage}`);
+      lastTask = userMessage;
+      think.clear(); // fresh trace per user message (the /debug view shows this turn)
       return settle(await agent.run({ message }));
     },
     async confirm(approved: boolean, answerText?: string): Promise<TurnResult> {

@@ -11,6 +11,9 @@
  * Run: npm run serve   (reads .env for ANTHROPIC_API_KEY)
  */
 import http from 'node:http';
+import Anthropic from '@anthropic-ai/sdk';
+import { createRequire } from 'node:module';
+import { readFileSync } from 'node:fs';
 import { DressShop } from '../app/shop.js';
 import { connectShop } from '../agent-layer/connect.js';
 import { connectDirect, connectOverMcp } from '../agent-layer/mcp-bridge.js';
@@ -21,6 +24,7 @@ import { loadDotEnv } from '../chatbot/env.js';
 import { createAssistant } from '../chatbot/assistant.js';
 import type { TurnResult } from '../chatbot/assistant.js';
 import { PAGE } from './page.js';
+import { DEBUG_PAGE } from './debug-page.js';
 
 loadDotEnv();
 
@@ -28,6 +32,13 @@ loadDotEnv();
 // (default) → it drives the session over a REAL MCP connection (see mcp-bridge).
 // Same behavior either way — the MCP layer is plumbing, not logic.
 const MODE: 'mcp' | 'direct' = process.env['HCI_MODE'] === 'direct' ? 'direct' : 'mcp';
+
+// Serve the LOCAL AgentThinkingUI build (not the CDN) so the debugger uses our
+// hardened proxy behavior + works offline. Read once at boot.
+const require2 = createRequire(import.meta.url);
+const ATUI_UMD = readFileSync(require2.resolve('agentthinkingui/umd'), 'utf8');
+const ATUI_CSS = readFileSync(require2.resolve('agentthinkingui/styles.css'), 'utf8');
+const EXPLAIN_MODEL = process.env['ANTHROPIC_MODEL'] ?? 'claude-opus-4-8';
 
 // Live progress for the dock: the assistant emits a status before each tool
 // runs; we buffer the current turn's steps so the browser can poll and show
@@ -99,6 +110,39 @@ const server = http.createServer((req, res) => {
       const { shop, session, assistant } = live; // the current instance for this request
       if (req.method === 'GET' && req.url === '/') {
         return send(res, 200, PAGE, 'text/html; charset=utf-8');
+      }
+      if (req.method === 'GET' && (req.url === '/debug' || req.url?.startsWith('/debug?'))) {
+        // The agent debugger — atui renders the live reasoning trace. `?embed=1`
+        // strips the chrome for iframing inside the storefront modal.
+        return send(res, 200, DEBUG_PAGE, 'text/html; charset=utf-8');
+      }
+      if (req.method === 'GET' && req.url === '/api/trace') {
+        // The current turn's reasoning as an AgentThinkingUI trace (grows live).
+        return send(res, 200, live.assistant.trace());
+      }
+      if (req.method === 'GET' && req.url === '/vendor/atui.umd.js') {
+        return send(res, 200, ATUI_UMD, 'application/javascript; charset=utf-8');
+      }
+      if (req.method === 'GET' && req.url === '/vendor/atui.css') {
+        return send(res, 200, ATUI_CSS, 'text/css; charset=utf-8');
+      }
+      if (req.method === 'POST' && req.url === '/api/explain') {
+        // The REAL "why this tool?" — hand atui's prepared prompt (task +
+        // trajectory + tool menu) to Claude for the model's own reasoning.
+        // This is what replaces the misleading lexical proxy.
+        const { prompt } = (await readBody(req)) as { prompt?: string };
+        try {
+          const client = new Anthropic(); // reads ANTHROPIC_API_KEY from .env
+          const message = await client.messages.create({
+            model: EXPLAIN_MODEL,
+            max_tokens: 500,
+            messages: [{ role: 'user', content: String(prompt ?? '') }],
+          });
+          const reason = message.content.map((b) => (b.type === 'text' ? b.text : '')).join('').trim();
+          return send(res, 200, { reason });
+        } catch (error) {
+          return send(res, 200, { error: String(error instanceof Error ? error.message : error) });
+        }
       }
       if (req.method === 'POST' && req.url === '/api/reset') {
         // Start fresh: build a brand-new shop + session + assistant, then close

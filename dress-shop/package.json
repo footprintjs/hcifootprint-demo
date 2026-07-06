@@ -26,6 +26,7 @@
     "@anthropic-ai/sdk": "^0.110.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "agentfootprint": "file:../../agentfootprint",
-    "hcifootprint": "file:../../hcifootprint"
+    "hcifootprint": "file:../../hcifootprint",
+    "agentthinkingui": "file:../../agentThinkingUI"
   }
 }

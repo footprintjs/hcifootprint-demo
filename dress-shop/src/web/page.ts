@@ -139,6 +139,15 @@ export const PAGE = /* html */ `<!doctype html>
   .ht.on{background:var(--ink);color:#fff;border-color:var(--ink)}
   .hout{margin:12px 14px;padding:12px;background:var(--bg);border:1px solid var(--line);border-radius:10px;font:12px/1.55 ui-monospace,Menlo,monospace;white-space:pre-wrap;overflow:auto;max-height:46vh;color:var(--ink)}
   .hfoot{padding:10px 14px;border-top:1px solid var(--line);color:var(--muted);font-size:11.5px}
+  .dbgbtn{align-self:flex-start;margin:-2px 0 4px;background:transparent;border:1px solid var(--line);color:var(--muted);border-radius:999px;padding:3px 10px;font:600 11.5px var(--sans);cursor:pointer}
+  .dbgbtn:hover{color:var(--wine);border-color:var(--wine)}
+  .dbgmodal{position:fixed;inset:0;z-index:60;background:rgba(30,15,20,.5);display:flex;align-items:center;justify-content:center;padding:24px;animation:fade .18s ease}
+  @keyframes fade{from{opacity:0}to{opacity:1}}
+  .dbgcard{background:var(--card);border-radius:18px;width:min(1120px,96vw);height:min(780px,92vh);display:grid;grid-template-rows:auto 1fr;overflow:hidden;box-shadow:0 40px 90px -20px rgba(40,10,20,.6)}
+  .dbghead{display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid var(--line);font-size:14px}
+  .dbghead small{color:var(--muted);font-weight:400}
+  .dbghead .x{margin-left:auto;background:transparent;border:0;font-size:17px;cursor:pointer;color:var(--muted)}
+  .dbgframe{width:100%;height:100%;border:0;display:block;background:var(--card)}
 
   /* ── floating assistant popup ── */
   .fab{position:fixed;right:24px;bottom:24px;z-index:40;display:inline-flex;align-items:center;gap:10px;background:var(--wine);color:#fff;border:0;border-radius:999px;padding:14px 20px;font:600 15px var(--sans);cursor:pointer;box-shadow:0 16px 34px -12px rgba(120,30,60,.6);transition:.2s}
@@ -185,6 +194,7 @@ export const PAGE = /* html */ `<!doctype html>
   <span id="mode"></span><span id="whereami"></span><span id="gapcount"></span>
   <span>you &amp; the assistant share <b>one live session</b></span>
   <button id="healthbtn" class="hbtn">◇ Graph health</button>
+  <a href="/debug" class="hbtn" style="text-decoration:none">🐛 Agent debugger</a>
 </div></footer>
 
 <div id="hpanel" class="hpanel" hidden>
@@ -192,6 +202,13 @@ export const PAGE = /* html */ `<!doctype html>
   <div class="htabs"><button id="htLive" class="ht on">Live graph</button><button id="htDrift" class="ht">A drifted example</button></div>
   <pre id="hout" class="hout"></pre>
   <div class="hfoot">Static one-call check — <b>checkGraph()</b> from hcifootprint/testing. It surfaces drift; your team owns the fix.</div>
+</div>
+
+<div id="dbgmodal" class="dbgmodal" hidden>
+  <div class="dbgcard">
+    <div class="dbghead"><b>🐛 Agent reasoning</b><small>this turn — via AgentThinkingUI</small><a href="/debug" target="_blank" style="margin-left:auto;color:var(--wine);text-decoration:none;font-weight:600;font-size:12px">open full ↗</a><button id="dbgx" class="x" title="Close">✕</button></div>
+    <iframe id="dbgframe" class="dbgframe" title="Agent reasoning"></iframe>
+  </div>
 </div>
 
 <button id="fab" class="fab"><span class="pulse"></span> Ask our stylist</button>
@@ -438,6 +455,7 @@ function renderTurn(turn){
     yes.onclick=function(){ answer(true); }; no.onclick=function(){ answer(false); }; return;
   }
   add('bot',turn.text);
+  var dbg=el('button','dbgbtn','🐛 See the thinking'); dbg.onclick=openDebugger; $('log').appendChild(dbg); $('log').scrollTop=1e9;
   if($('modal').hidden){ unread=true; }
 }
 $('f').onsubmit=async function(e){
@@ -467,6 +485,17 @@ $('healthbtn').onclick=openHealth;
 $('hx').onclick=function(){ $('hpanel').hidden=true; };
 $('htLive').onclick=function(){ hvariant='real'; renderHealth(); };
 $('htDrift').onclick=function(){ hvariant='drifted'; renderHealth(); };
+
+/* ── agent reasoning debugger — atui lives in an ISOLATED iframe (/debug?embed).
+   atui scopes its CSS with zero-specificity :where(.atui …) so a host can theme
+   it; the flip side is the storefront's naked global classes (.stage, .panel…)
+   would leak IN and break atui's layout. An iframe is a clean document boundary
+   — the consumer's job — so none of the shop's CSS can reach atui. ── */
+function openDebugger(){ $('dbgframe').src='/debug?embed=1&t='+Date.now(); $('dbgmodal').hidden=false; }
+function closeDebugger(){ $('dbgmodal').hidden=true; $('dbgframe').src='about:blank'; }
+$('dbgx').onclick=closeDebugger;
+$('dbgmodal').onclick=function(e){ if(e.target===$('dbgmodal')) closeDebugger(); };
+document.addEventListener('keydown',function(e){ if(e.key==='Escape'&&!$('dbgmodal').hidden) closeDebugger(); });
 
 refresh();
 </script>
