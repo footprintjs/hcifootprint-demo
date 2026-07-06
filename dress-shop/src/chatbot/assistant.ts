@@ -20,6 +20,9 @@ import { Agent, askHuman, defineTool, isPaused } from 'agentfootprint';
 import { anthropic } from 'agentfootprint/llm-providers';
 import { agentThinkingTrace } from 'agentfootprint/observe';
 import type { AttTrace } from 'agentfootprint/observe';
+import { toolChoiceRecorder } from 'agentfootprint/observe';
+import type { ToolChoiceRecorderHandle } from 'agentfootprint/observe';
+import type { Embedder } from 'agentfootprint/memory';
 import type { Session } from 'hcifootprint';
 import type { AppMcp } from '../agent-layer/mcp-bridge.js';
 
@@ -62,6 +65,13 @@ export interface AssistantOptions {
    * polls these so the user sees what the agent is doing, not just "thinking".
    */
   onActivity?: (status: string) => void;
+  /**
+   * Optional embedding model for SEMANTIC tool-choice scoring. When present, the
+   * assistant attaches agentfootprint's toolChoiceRecorder and stamps each tool's
+   * margin score onto the trace (real ranked bars in the debugger). When null,
+   * scoring stays off — the debugger shows "Semantic score: off". Never faked.
+   */
+  embedder?: Embedder | null;
 }
 
 export interface Assistant {
@@ -74,8 +84,10 @@ export interface Assistant {
   /**
    * The current turn's reasoning as an AgentThinkingUI trace (prompt → ask →
    * return → answer beats). Grows live during a run — the /debug page polls it.
+   * Async because, with a semantic embedder, it enriches tools with real
+   * choice-margin scores (embedded lazily) before returning.
    */
-  trace(): AttTrace;
+  trace(): Promise<AttTrace>;
 }
 
 /** Shopper-friendly status per action id — what the agent is doing, in plain words. */
@@ -119,6 +131,12 @@ export function createAssistant(session: Session, appMcp: AppMcp, options?: Assi
   // agent below via .recorder(). It maps agentfootprint's emit stream (llm/tool/
   // thinking beats) straight into atui's Trace shape; no adapter needed.
   const think = agentThinkingTrace({ agent: 'Maison Stylist', model: MODEL, asker: 'you' });
+  // SEMANTIC tool-choice scoring — only when an embedder is configured. Ranks
+  // the offered catalog against the choice context via influence-core scoreMargin
+  // (embedding cosine), lazily on read. Null embedder ⇒ no scorer ⇒ proxy stays.
+  const choice: ToolChoiceRecorderHandle | null = options?.embedder
+    ? toolChoiceRecorder({ embedder: options.embedder })
+    : null;
 
   // The app-facing tools come straight from the MCP server's tools/list.
   const mcpNameByApiName = new Map<string, string>();
@@ -217,6 +235,7 @@ export function createAssistant(session: Session, appMcp: AppMcp, options?: Assi
     .system(SYSTEM)
     .maxIterations(16)
     .recorder(think);
+  if (choice) agentBuilder = agentBuilder.recorder(choice);
   for (const tool of tools) agentBuilder = agentBuilder.tool(tool);
   const agent = agentBuilder.build();
 
@@ -237,8 +256,32 @@ export function createAssistant(session: Session, appMcp: AppMcp, options?: Assi
     get awaitingConfirmation() {
       return pausedCheckpoint !== null;
     },
-    trace() {
-      return think.getTrace({ task: lastTask });
+    async trace(): Promise<AttTrace> {
+      const built = think.getTrace({ task: lastTask });
+      if (!choice) return built;
+      try {
+        // Enrich each tool the model saw with its REAL choice-margin score, so
+        // atui renders ranked bars (it uses `relevance` verbatim, skipping the
+        // proxy). Match a scored call to the ask step that chose the same tool.
+        const calls = await choice.getCalls();
+        const used = new Set<string>();
+        for (const raw of built.steps) {
+          const step = raw as { kind: string; tool?: string; toolsSeen?: { name: string; relevance?: number }[] };
+          if (step.kind !== 'ask' || !step.toolsSeen || !step.tool) continue;
+          const stepTool = step.tool;
+          const call = calls.find((c) => c.margin && !used.has(c.runtimeStageId) && c.margin.chosen.includes(stepTool));
+          if (!call || !call.margin) continue;
+          used.add(call.runtimeStageId);
+          const byName = new Map(call.margin.scores.map((s) => [s.name, s.score]));
+          for (const seen of step.toolsSeen) {
+            const score = byName.get(seen.name);
+            if (typeof score === 'number') seen.relevance = score;
+          }
+        }
+      } catch {
+        /* semantic scoring is best-effort — fall back to the lexical proxy */
+      }
+      return built;
     },
     async send(userMessage: string): Promise<TurnResult> {
       const message =

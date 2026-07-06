@@ -17,6 +17,7 @@ import { readFileSync } from 'node:fs';
 import { DressShop } from '../app/shop.js';
 import { connectShop } from '../agent-layer/connect.js';
 import { connectDirect, connectOverMcp } from '../agent-layer/mcp-bridge.js';
+import { makeEmbedder } from '../agent-layer/embedder.js';
 import { checkGraph } from 'hcifootprint/testing';
 import { dressShopGraph } from '../agent-layer/graph.js';
 import { driftedDressShopGraph } from '../drift/drifted-graph.js';
@@ -39,6 +40,10 @@ const require2 = createRequire(import.meta.url);
 const ATUI_UMD = readFileSync(require2.resolve('agentthinkingui/umd'), 'utf8');
 const ATUI_CSS = readFileSync(require2.resolve('agentthinkingui/styles.css'), 'utf8');
 const EXPLAIN_MODEL = process.env['ANTHROPIC_MODEL'] ?? 'claude-opus-4-8';
+
+// Semantic tool-choice scoring is opt-in: present only with an embedding model
+// (OPENAI_API_KEY). Null ⇒ the debugger shows "Semantic score: off" (never faked).
+const embedder = makeEmbedder();
 
 // Live progress for the dock: the assistant emits a status before each tool
 // runs; we buffer the current turn's steps so the browser can poll and show
@@ -64,6 +69,7 @@ async function buildLive(): Promise<Live> {
   const session = connectShop(shop);
   const appMcp = MODE === 'mcp' ? await connectOverMcp(session) : connectDirect(session);
   const assistant = createAssistant(session, appMcp, {
+    embedder,
     onActivity: (status) => {
       activity.push(status);
       if (activity.length > 24) activity.shift();
@@ -118,7 +124,8 @@ const server = http.createServer((req, res) => {
       }
       if (req.method === 'GET' && req.url === '/api/trace') {
         // The current turn's reasoning as an AgentThinkingUI trace (grows live).
-        return send(res, 200, live.assistant.trace());
+        // With a semantic embedder, tools carry real choice-margin scores.
+        return send(res, 200, await live.assistant.trace());
       }
       if (req.method === 'GET' && req.url === '/vendor/atui.umd.js') {
         return send(res, 200, ATUI_UMD, 'application/javascript; charset=utf-8');
@@ -258,7 +265,8 @@ const server = http.createServer((req, res) => {
 const PORT = Number(process.env['PORT'] ?? 5178);
 server.listen(PORT, () => {
   const transport = MODE === 'mcp' ? 'over MCP (real protocol)' : 'direct (in-process, no MCP)';
-  console.log(`\n  dress-shop assistant [${transport}] → http://localhost:${PORT}\n`);
+  console.log(`\n  dress-shop assistant [${transport}] → http://localhost:${PORT}`);
+  console.log(`  debugger: /debug  ·  semantic tool-scoring: ${embedder ? 'ON (embedding model)' : 'off (set OPENAI_API_KEY to enable)'}\n`);
   console.log('  Try: "find me a red floral dress and buy it" — you\'ll be asked to confirm the order.');
   console.log('  The right panel shows live app state and the gap ledger.\n');
 });
