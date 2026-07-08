@@ -23,6 +23,7 @@ import type { AttTrace } from 'agentfootprint/observe';
 import { toolChoiceRecorder } from 'agentfootprint/observe';
 import type { ToolChoiceRecorderHandle } from 'agentfootprint/observe';
 import type { Embedder } from 'agentfootprint/memory';
+import { attributeChoice, type AttributionUnit } from 'agentfootprint/debug';
 import type { Session } from 'hcifootprint';
 import type { AppMcp } from '../agent-layer/mcp-bridge.js';
 
@@ -48,6 +49,39 @@ Work method, every turn:
 6. If NO action or skill can serve the request, call report_gap with the user's ask BEFORE
    telling them you can't help — that is how the team learns what to build next.
 Keep replies short and grounded in what actually happened (tool results), never in intentions.`;
+
+/**
+ * Split the system prompt into its numbered rules as attribution units — the
+ * input to agentfootprint's `attributeChoice`. A "procedural pick" (e.g.
+ * whats_here) is caused by one of THESE rules, not by the user's task, so the
+ * debugger attributes each pick to the rule that best explains it.
+ *
+ * Parsed by ORDER (labelled rule-1, rule-2, …), not by the printed number, so
+ * the prompt's two "4." lines stay two distinct units. Continuation lines
+ * (indented) fold into the current rule; the first un-numbered, un-indented
+ * line (the "Keep replies short…" tail) ends the list.
+ */
+export function systemRuleUnits(system: string = SYSTEM): AttributionUnit[] {
+  const rules: string[] = [];
+  let current: string | null = null;
+  for (const line of system.split('\n')) {
+    const numbered = /^\s*\d+\.\s+(.*)$/.exec(line);
+    if (numbered) {
+      if (current !== null) rules.push(current.trim());
+      current = numbered[1];
+    } else if (current !== null && /^\s+\S/.test(line)) {
+      current += ' ' + line.trim(); // indented continuation of the current rule
+    } else if (current !== null) {
+      rules.push(current.trim()); // an un-indented, un-numbered line ends the rules
+      current = null;
+    }
+  }
+  if (current !== null) rules.push(current.trim());
+  return rules.map((text, i) => ({ id: `rule-${i + 1}`, channel: 'system', text }));
+}
+
+/** The dress-shop system prompt's rules, parsed once for choice attribution. */
+const RULE_UNITS = systemRuleUnits();
 
 export interface ConfirmQuestion {
   affordanceId: string;
@@ -137,6 +171,11 @@ export function createAssistant(session: Session, appMcp: AppMcp, options?: Assi
   const choice: ToolChoiceRecorderHandle | null = options?.embedder
     ? toolChoiceRecorder({ embedder: options.embedder })
     : null;
+  // The same embedder also drives per-rule ATTRIBUTION (agentfootprint's
+  // attributeChoice): which system-prompt rule best explains each pick. This
+  // is what recovers PROCEDURAL picks (whats_here ← "call whats_here first")
+  // that semantic scoring — which never sees the system prompt — cannot.
+  const attributionEmbedder: Embedder | null = options?.embedder ?? null;
 
   // The app-facing tools come straight from the MCP server's tools/list.
   const mcpNameByApiName = new Map<string, string>();
@@ -280,6 +319,50 @@ export function createAssistant(session: Session, appMcp: AppMcp, options?: Assi
         }
       } catch {
         /* semantic scoring is best-effort — fall back to the lexical proxy */
+      }
+
+      // Per-rule ATTRIBUTION — for each pick, which system-prompt rule (or the
+      // task) best explains it. This is the channel semantic scoring is blind
+      // to: whats_here attributes to rule-1 ("call whats_here first"), not to
+      // the user's task. Attached to the step for the debugger to render.
+      if (attributionEmbedder) {
+        const units: AttributionUnit[] = [{ id: 'task', channel: 'task', text: lastTask }, ...RULE_UNITS];
+        const textById = new Map(units.map((u) => [u.id, u.text]));
+        // rule-1 → "Rule 1", task → "the task" — the label atui shows per row.
+        const unitLabel = (id: string) => (id === 'task' ? 'the task' : id.replace(/^rule-(\d+)$/, 'Rule $1'));
+        for (const raw of built.steps) {
+          const step = raw as {
+            kind: string;
+            tool?: string;
+            toolsSeen?: { name: string; description?: string }[];
+            attribution?: unknown;
+          };
+          if (step.kind !== 'ask' || !step.tool || !step.toolsSeen) continue;
+          const chosen = step.toolsSeen.find((t) => t.name === step.tool);
+          if (!chosen) continue;
+          const toolText = chosen.description ? `${chosen.name}: ${chosen.description}` : chosen.name;
+          try {
+            const a = await attributeChoice({
+              tool: { name: chosen.name, text: toolText },
+              units,
+              embedder: attributionEmbedder,
+            });
+            // Shape into atui's documented WhyAttribution: ranked rule rows (top
+            // cited) + a prominent "% procedural" headline. atui's "By the rules"
+            // strategy renders this for free — no bespoke UI in the app.
+            step.attribution = {
+              headline: `${Math.round((a.byChannel['system'] ?? 0) * 100)}% procedural`,
+              rows: a.units.map((u) => ({
+                label: unitLabel(u.id),
+                score: u.score,
+                quote: textById.get(u.id),
+                picked: u.id === a.top.id,
+              })),
+            };
+          } catch {
+            /* attribution is best-effort — on failure the panel omits the strategy */
+          }
+        }
       }
       return built;
     },

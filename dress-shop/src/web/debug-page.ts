@@ -45,7 +45,7 @@ export const DEBUG_PAGE = /* html */ `<!doctype html>
   .bar{display:flex;gap:10px;padding:14px 18px;border-top:1px solid var(--line);background:var(--card)}
   .bar input{flex:1;padding:11px 14px;border:1px solid var(--line);border-radius:12px;font:15px var(--sans);background:#fff;color:var(--ink)}
   .bar button{background:var(--wine);color:#fff;border:0;border-radius:12px;padding:11px 20px;font:600 15px var(--sans);cursor:pointer}
-  /* embed mode (iframed inside the storefront modal): just atui, no chrome */
+  /* embed mode (iframed inside the storefront modal): just atui, no chat chrome */
   body.embed > header, body.embed > .bar, body.embed > #reply, body.embed > #confirm{display:none !important}
   body.embed{background:var(--card)}
 </style>
