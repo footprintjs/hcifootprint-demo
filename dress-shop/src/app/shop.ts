@@ -44,6 +44,13 @@ export class DressShop {
   #stateListeners = new Set<StateListener>();
   #navigateListeners = new Set<NavigateListener>();
   #orderCounter = 1;
+  /** The catalog this store sells. Defaults to the demo data; injectable so a
+   *  bigger store (or a benchmark variant) seeds any size without logic changes. */
+  readonly #catalog: readonly Dress[];
+
+  constructor(catalog: readonly Dress[] = DRESSES) {
+    this.#catalog = catalog;
+  }
 
   get state(): Readonly<ShopState> {
     return this.#state;
@@ -69,7 +76,7 @@ export class DressShop {
 
   search(query: string): Dress[] {
     const q = query.toLowerCase();
-    const results = DRESSES.filter(
+    const results = this.#catalog.filter(
       (d) => d.name.toLowerCase().includes(q) || d.color.includes(q),
     );
     this.#setState({ results, activeColor: null });
@@ -83,7 +90,7 @@ export class DressShop {
   }
 
   openDress(dressId: string): void {
-    const dress = DRESSES.find((d) => d.id === dressId);
+    const dress = this.#catalog.find((d) => d.id === dressId);
     if (!dress) throw new Error(`No dress with id '${dressId}'.`);
     this.#setState({ selectedDress: dress });
     this.#go('product');

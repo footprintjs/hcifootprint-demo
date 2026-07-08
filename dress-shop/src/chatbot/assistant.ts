@@ -17,7 +17,7 @@
  *                                            assistant.confirm(approved) to resume
  */
 import { Agent, askHuman, defineTool, isPaused } from 'agentfootprint';
-import { anthropic } from 'agentfootprint/llm-providers';
+import { anthropic, type LLMProvider } from 'agentfootprint/llm-providers';
 import { agentThinkingTrace } from 'agentfootprint/observe';
 import type { AttTrace } from 'agentfootprint/observe';
 import { toolChoiceRecorder } from 'agentfootprint/observe';
@@ -230,6 +230,19 @@ export interface AssistantOptions {
    * scoring stays off — the debugger shows "Semantic score: off". Never faked.
    */
   embedder?: Embedder | null;
+  /**
+   * Inject the LLM provider instead of the default `anthropic({...})`. The
+   * benchmark harness (bench/) passes a token-counting wrapper so it can meter
+   * the exact input/output tokens per call — the same instrument it hands the
+   * DOM baseline, so both modalities are measured identically. Omit in normal
+   * use to keep the shipped Anthropic behavior (generous timeout + retries).
+   */
+  provider?: LLMProvider;
+  /**
+   * Override the ReAct iteration cap (default 16). The benchmark sets this from
+   * its per-run turn cap so both modalities run under the identical bound.
+   */
+  maxIterations?: number;
 }
 
 export interface Assistant {
@@ -391,13 +404,13 @@ export function createAssistant(session: Session, appMcp: AppMcp, options?: Assi
     // A full buy-it-for-me flow is a long chain of Opus turns; each is a
     // non-streaming call. Give it a generous timeout + retries so one slow
     // turn (or a transient network stall) doesn't surface as "Request timed
-    // out" — it retries instead.
-    provider: anthropic({ defaultModel: MODEL, timeout: 120_000, maxRetries: 3 }),
+    // out" — it retries instead. The benchmark can inject its own provider.
+    provider: options?.provider ?? anthropic({ defaultModel: MODEL, timeout: 120_000, maxRetries: 3 }),
     name: 'dress-shop-assistant',
     model: 'anthropic',
   })
     .system(SYSTEM)
-    .maxIterations(16)
+    .maxIterations(options?.maxIterations ?? 16)
     .recorder(think);
   if (choice) agentBuilder = agentBuilder.recorder(choice);
   for (const tool of tools) agentBuilder = agentBuilder.tool(tool);

@@ -11,13 +11,18 @@
     "serve": "tsx src/web/server.ts",
     "serve:mcp": "PORT=5178 HCI_MODE=mcp tsx src/web/server.ts",
     "serve:direct": "PORT=5179 HCI_MODE=direct tsx src/web/server.ts",
-    "drift": "tsx src/drift/drift-demo.ts"
+    "drift": "tsx src/drift/drift-demo.ts",
+    "bench:pilot": "tsx bench/run.ts",
+    "bench:report": "tsx bench/report.ts",
+    "bench:scale": "tsx bench/scale.ts",
+    "bench:scale-report": "tsx bench/scale-report.ts"
   },
   "engines": {
     "node": ">=20"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
+    "playwright-core": "1.58.2",
     "tsx": "^4.22.5",
     "typescript": "^5.5.0",
     "vitest": "^4.0.0"
