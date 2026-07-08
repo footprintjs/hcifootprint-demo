@@ -23,7 +23,7 @@ import type { AttTrace } from 'agentfootprint/observe';
 import { toolChoiceRecorder } from 'agentfootprint/observe';
 import type { ToolChoiceRecorderHandle } from 'agentfootprint/observe';
 import type { Embedder } from 'agentfootprint/memory';
-import { attributeChoice, type AttributionUnit } from 'agentfootprint/debug';
+import { explainChoice, snippetUnits, type AttributionUnit, type ChoiceExplanation } from 'agentfootprint/debug';
 import type { Session } from 'hcifootprint';
 import type { AppMcp } from '../agent-layer/mcp-bridge.js';
 
@@ -82,6 +82,130 @@ export function systemRuleUnits(system: string = SYSTEM): AttributionUnit[] {
 
 /** The dress-shop system prompt's rules, parsed once for choice attribution. */
 const RULE_UNITS = systemRuleUnits();
+
+/** One channel meter of the Why panel's verdict card (atui types/trace.d.ts — WhyChannel). */
+export interface WhyChannel {
+  id: string;
+  label: string;
+  share: number;
+  quote?: string;
+  citeLabel?: string;
+}
+
+/** What gets stamped on an ask step (atui types/trace.d.ts — WhyAttribution).
+ *  `headline` is deliberately absent: with `channels` present, atui leads with
+ *  the verdict card, which supersedes it. */
+export interface WhyAttribution {
+  rows: { label: string; score: number; quote?: string; picked?: boolean; channel?: string }[];
+  channels: WhyChannel[];
+  note: string;
+}
+
+/** Plain display label per channel — atui falls back to raw ids without these. */
+const CHANNEL_LABELS: Record<string, string> = {
+  system: 'The rules',
+  task: 'Your request',
+  data: 'Earlier results',
+};
+
+/** How the winning channel reads in the note's plain sentence. */
+const CHANNEL_IN_A_SENTENCE: Record<string, string> = {
+  system: "the agent's own rules",
+  task: 'your request',
+  data: 'data returned by an earlier step',
+};
+
+/** rule-3 → 'Rule 3', task → 'your request', data-2 → 'result 2'; else the raw id. */
+function unitLabel(id: string): string {
+  if (id === 'task') return 'your request';
+  const rule = /^rule-(\d+)$/.exec(id);
+  if (rule) return `Rule ${rule[1]}`;
+  const data = /^data-(\d+)$/.exec(id);
+  if (data) return `result ${data[1]}`;
+  return id;
+}
+
+/** Short citation label for a channel's top unit ('Rule 3' / 'your request' / …). */
+function channelCiteLabel(channel: string, unitId: string): string | undefined {
+  if (channel === 'system') return unitLabel(unitId);
+  if (channel === 'task') return 'your request';
+  if (channel === 'data') return 'a result from the previous step';
+  return undefined;
+}
+
+/**
+ * Map agentfootprint's `explainChoice` verdict into atui's WhyAttribution shape:
+ * one labelled meter per channel (winner first — the sort is upstream's), the
+ * ranked units as rows (capped at 8), and one plain sentence naming the winner.
+ * Pure — unit-tested directly in test/attribution.test.ts.
+ */
+export function toWhyAttribution(explanation: ChoiceExplanation): WhyAttribution {
+  const channels: WhyChannel[] = explanation.channels.map((c) => {
+    const channel: WhyChannel = {
+      id: c.channel,
+      label: CHANNEL_LABELS[c.channel] ?? c.channel,
+      share: c.share,
+    };
+    if (c.top) {
+      channel.quote = c.top.text;
+      const cite = channelCiteLabel(c.channel, c.top.id);
+      if (cite !== undefined) channel.citeLabel = cite;
+    }
+    return channel;
+  });
+  const rows = explanation.units.slice(0, 8).map((u) => ({
+    label: unitLabel(u.id),
+    score: u.score,
+    quote: u.text,
+    picked: u.id === explanation.top.id,
+    channel: u.channel,
+  }));
+  const winner = explanation.channels[0]?.channel ?? '';
+  const note = `Best explanation: ${CHANNEL_IN_A_SENTENCE[winner] ?? winner}. (similarity estimate — not a mind-read)`;
+  return { channels, rows, note };
+}
+
+/**
+ * Cut a tool description down to what DISTINGUISHES the tool. The MCP bridge
+ * appends the SAME how-to-call suffix to every tool ("Call with no arguments
+ * to open this skill…") — constant boilerplate across all tools adds zero
+ * discrimination (same argument as excluding the constant system prompt from
+ * margin scoring), and its procedural vocabulary drags every pick toward the
+ * rules channel. Descriptions without the marker pass through unchanged.
+ * Pure — unit-tested directly in test/attribution.test.ts.
+ */
+export function descriptionEssence(description: string): string {
+  const marker = description.indexOf('Call with no arguments');
+  if (marker === -1) return description;
+  return description.slice(0, marker).replace(/[\s.,;:—–-]+$/, '');
+}
+
+/**
+ * Unwrap the MCP bridge's result envelope before cutting data units. Tool
+ * outputs arrive as `{ value: "<pretty-printed JSON string>" }` — cutting that
+ * raw JSON text yields brace-noise lines, not citable rows. If `value` is a
+ * string that parses as JSON, return the parsed value (so snippetUnits sees
+ * real rows like `id: d3, name: …, price: …`); a non-JSON string passes
+ * through as the string; anything else is returned unchanged.
+ * Pure — unit-tested directly in test/attribution.test.ts.
+ */
+export function unwrapResult(output: unknown): unknown {
+  if (typeof output === 'object' && output !== null && 'value' in output) {
+    const value = (output as { value: unknown }).value;
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+        try {
+          return JSON.parse(trimmed);
+        } catch {
+          return value; // looked like JSON but wasn't — quote the string itself
+        }
+      }
+      return value;
+    }
+  }
+  return output;
+}
 
 export interface ConfirmQuestion {
   affordanceId: string;
@@ -171,10 +295,11 @@ export function createAssistant(session: Session, appMcp: AppMcp, options?: Assi
   const choice: ToolChoiceRecorderHandle | null = options?.embedder
     ? toolChoiceRecorder({ embedder: options.embedder })
     : null;
-  // The same embedder also drives per-rule ATTRIBUTION (agentfootprint's
-  // attributeChoice): which system-prompt rule best explains each pick. This
-  // is what recovers PROCEDURAL picks (whats_here ← "call whats_here first")
-  // that semantic scoring — which never sees the system prompt — cannot.
+  // The same embedder also drives per-pick ATTRIBUTION (agentfootprint's
+  // explainChoice): which context channel — a system-prompt rule, the task,
+  // or data an earlier tool returned — best explains each pick. This is what
+  // recovers PROCEDURAL picks (whats_here ← "call whats_here first") that
+  // semantic scoring — which never sees the system prompt — cannot.
   const attributionEmbedder: Embedder | null = options?.embedder ?? null;
 
   // The app-facing tools come straight from the MCP server's tools/list.
@@ -321,44 +446,52 @@ export function createAssistant(session: Session, appMcp: AppMcp, options?: Assi
         /* semantic scoring is best-effort — fall back to the lexical proxy */
       }
 
-      // Per-rule ATTRIBUTION — for each pick, which system-prompt rule (or the
-      // task) best explains it. This is the channel semantic scoring is blind
-      // to: whats_here attributes to rule-1 ("call whats_here first"), not to
-      // the user's task. Attached to the step for the debugger to render.
+      // Per-pick ATTRIBUTION — for each pick, which context CHANNEL best
+      // explains it: the system rules (procedural — whats_here ← "call
+      // whats_here first"), the user's task, or DATA an earlier tool returned
+      // ("open dress d42" ← the search result that listed d42). Stamped in
+      // atui's WhyAttribution shape; the Why panel renders the verdict card.
       if (attributionEmbedder) {
-        const units: AttributionUnit[] = [{ id: 'task', channel: 'task', text: lastTask }, ...RULE_UNITS];
-        const textById = new Map(units.map((u) => [u.id, u.text]));
-        // rule-1 → "Rule 1", task → "the task" — the label atui shows per row.
-        const unitLabel = (id: string) => (id === 'task' ? 'the task' : id.replace(/^rule-(\d+)$/, 'Rule $1'));
-        for (const raw of built.steps) {
-          const step = raw as {
+        for (let i = 0; i < built.steps.length; i++) {
+          const step = built.steps[i] as {
             kind: string;
             tool?: string;
+            input?: Record<string, unknown>;
             toolsSeen?: { name: string; description?: string }[];
             attribution?: unknown;
           };
           if (step.kind !== 'ask' || !step.tool || !step.toolsSeen) continue;
           const chosen = step.toolsSeen.find((t) => t.name === step.tool);
           if (!chosen) continue;
-          const toolText = chosen.description ? `${chosen.name}: ${chosen.description}` : chosen.name;
+          // The pick the model made is tool + ARGUMENTS — the arguments are
+          // where the data echo lives ("view-dress with dressId d3" cites the
+          // search result that returned d3). Boilerplate the bridge appends to
+          // every description is cut first: constant text across all tools
+          // adds zero discrimination and drags every pick toward the rules.
+          const essence = chosen.description ? descriptionEssence(chosen.description) : '';
+          const inputJson =
+            step.input && Object.keys(step.input).length > 0 ? ` — called with ${JSON.stringify(step.input).slice(0, 200)}` : '';
+          const toolText = `${chosen.name}${essence ? `: ${essence}` : ''}${inputJson}`;
           try {
-            const a = await attributeChoice({
+            // The data channel: what the model had just read — the nearest tool
+            // result BEFORE this ask. The first ask has no prior return, so its
+            // verdict simply carries no data units.
+            let dataUnits: AttributionUnit[] = [];
+            for (let j = i - 1; j >= 0; j--) {
+              const prev = built.steps[j] as { kind: string; output?: unknown };
+              if (prev.kind === 'return') {
+                // The bridge wraps results as { value: "<JSON string>" } —
+                // unwrap so the cutter sees real rows, not raw JSON text lines.
+                dataUnits = snippetUnits(unwrapResult(prev.output), { max: 10 });
+                break;
+              }
+            }
+            const explanation = await explainChoice({
               tool: { name: chosen.name, text: toolText },
-              units,
+              units: [{ id: 'task', channel: 'task', text: lastTask }, ...RULE_UNITS, ...dataUnits],
               embedder: attributionEmbedder,
             });
-            // Shape into atui's documented WhyAttribution: ranked rule rows (top
-            // cited) + a prominent "% procedural" headline. atui's "By the rules"
-            // strategy renders this for free — no bespoke UI in the app.
-            step.attribution = {
-              headline: `${Math.round((a.byChannel['system'] ?? 0) * 100)}% procedural`,
-              rows: a.units.map((u) => ({
-                label: unitLabel(u.id),
-                score: u.score,
-                quote: textById.get(u.id),
-                picked: u.id === a.top.id,
-              })),
-            };
+            step.attribution = toWhyAttribution(explanation);
           } catch {
             /* attribution is best-effort — on failure the panel omits the strategy */
           }
