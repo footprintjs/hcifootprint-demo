@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      # dress-shop links its three libraries by relative path
+      # ("file:../../<sibling>" from dress-shop/), so check out everything
+      # under one parent — this repo at hcifootprint-demo/ and each sibling
+      # beside it, the same layout as the author's machine. Paths are
+      # case-sensitive on the runner: agentThinkingUI must match the link.
+      - uses: actions/checkout@v7
+        with:
+          path: hcifootprint-demo
+
+      - uses: actions/checkout@v7
+        with:
+          repository: footprintjs/agentfootprint
+          path: agentfootprint
+
+      - uses: actions/checkout@v7
+        with:
+          repository: footprintjs/hcifootprint
+          path: hcifootprint
+
+      - uses: actions/checkout@v7
+        with:
+          repository: footprintjs/agentThinkingUI
+          path: agentThinkingUI
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      # The siblings resolve from dist/ (gitignored) — build each fresh
+      # checkout so the file: links serve the same files the demo sees
+      # locally. hcifootprint commits its lockfile (npm ci); the other two
+      # gitignore theirs (npm install).
+      - name: Build hcifootprint
+        working-directory: hcifootprint
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build agentfootprint
+        working-directory: agentfootprint
+        run: |
+          npm install
+          npm run build
+
+      - name: Build agentthinkingui
+        working-directory: agentThinkingUI
+        run: |
+          npm install
+          npm run build
+
+      # npm install (not ci): the committed lockfile pins the registry deps
+      # but records the file:-linked siblings at whatever version they had
+      # locally — npm ci would fail the moment a sibling bumps its version.
+      - name: Install demo deps
+        working-directory: hcifootprint-demo/dress-shop
+        run: npm install
+
+      - name: Typecheck
+        working-directory: hcifootprint-demo/dress-shop
+        run: npm run typecheck
+
+      # Tests only — never the bench pilot/scale scripts (they call a paid
+      # API). The browser smoke test (bench/ax-tree.test.ts) skips itself
+      # when the pinned chromium headless shell is absent, as it is here —
+      # do not install browsers on the runner.
+      - name: Test
+        working-directory: hcifootprint-demo/dress-shop
+        run: npm test
